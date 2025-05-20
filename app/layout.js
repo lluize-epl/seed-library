@@ -1,5 +1,7 @@
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
+import edisonLogo from "../public/edison-logo.png";
+import Image from "next/image";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
