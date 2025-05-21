@@ -199,17 +199,20 @@ export default function BorrowPage() {
             >
               {loading ? "Looking up..." : "Find My Account"}
             </button>
+
             {error && <p className="text-red-600">{error}</p>}
           </form>
         ) : (
           <div className="w-full flex flex-col gap-4">
             <h2 className="text-xl font-bold text-green-dark mt-6">
-              Welcome, {user["Full Name"]}
+              Welcome, {user["Full Name"]} !
             </h2>
-            <p className="text-lg">Email: {user.Email}</p>
-            <p className="text-lg">Library Card: {user["Library card"]}</p>
+            <p className="text-lg">&bull; Email: {user.Email}</p>
             <p className="text-lg">
-              Last borrow: {user["UpdatedAt"].split(" ")[0]}
+              &bull; Library Card: {user["Library card"]}
+            </p>
+            <p className="text-lg mb-6">
+              &bull; Last borrow: {user["UpdatedAt"].split(" ")[0]}
             </p>
             {user && (
               <div className="w-full">
@@ -275,12 +278,18 @@ export default function BorrowPage() {
             </form>
             <button
               onClick={() => setUser(null)}
-              className="w-full mt-12 py-4 rounded-xl text-xl font-semibold bg-white text-black ring-2 shadow-md"
+              className="w-full py-4 mx-auto m-8 rounded-xl text-xl font-semibold bg-white text-black ring-2 shadow-md"
             >
               Look up another account
             </button>
           </div>
         )}
+        <button
+          className="w-full py-4 rounded-xl text-xl font-semibold bg-white text-green-dark border-2 border-green-medium shadow-md focus:outline-none focus:ring-2 focus:ring-green-dark transition text-center block"
+          onClick={() => router.push("/")}
+        >
+          Go back
+        </button>
       </div>
     </main>
   );

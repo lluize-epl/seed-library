@@ -26,7 +26,6 @@ export default function Home() {
           >
             <a
               className="w-full py-6 rounded-xl text-xl font-semibold bg-black text-white shadow-md focus:outline-none focus:ring-2 focus:ring-green-dark transition text-center block"
-              target="_blank" // Remove if you want to open in same tab
               rel="noopener noreferrer"
             >
               Start a new Application
