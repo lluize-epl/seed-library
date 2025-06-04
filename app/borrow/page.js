@@ -1,295 +1,757 @@
+// /app/borrow/page.js
 "use client";
-import { useState } from "react";
-import edisonLogo from "@/public/edison-logo.png";
+import { useState, useEffect, use } from "react";
+import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import Image from "next/image";
-import { useRouter } from "next/navigation";
+// import edisonLogo from "@/public/edison-logo.png";
+import seedLogo from "@/public/seedLogo.jpeg";
+// API Functions from your lib/noco-apis/ structure
+import { fetchUserByLibraryCard } from "@/lib/noco-apis/users";
+import {
+  fetchAvailableSeedsAtInventory,
+  updateSeedInventoryQuantity,
+} from "@/lib/noco-apis/seedInventory";
+import { fetchAllBranches } from "@/lib/noco-apis/branches";
+import { fetchSeedDetailsByIds } from "@/lib/noco-apis/seeds";
+import { createPendingPickupRequest } from "@/lib/noco-apis/pendingPickups";
+
+// Utils from lib/utils.js
+import {
+  formatDate,
+  isDateExpired,
+  processUserBorrowedData,
+  countRecentBorrows,
+  getActivelyHeldSeedIds,
+} from "@/lib/utils";
 
 export default function BorrowPage() {
-  const [phoneNumber, setphoneNumber] = useState("");
-  const [user, setUser] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
-  const [seed, setSeeds] = useState(null);
-  const [selectedSeeds, setSelectedSeeds] = useState([]);
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const pathname = usePathname();
 
-  async function fetchUserByphoneNumber(phoneNumber) {
-    const url = `${process.env.NEXT_PUBLIC_NOCO_BASE_URL}/tables/${process.env.NEXT_PUBLIC_NOCO_USER_TABLE_ID}/records?where=(Phone,eq,${phoneNumber})`;
+  const [step, setStep] = useState(1); // 1: Lookup, 2: Select Branch, 3: Select Seeds
+  const [libraryCardInput, setLibraryCardInput] = useState("");
+  const [user, setUser] = useState(null);
 
-    const res = await fetch(url, {
-      headers: {
-        "xc-token": process.env.NEXT_PUBLIC_NOCO_API_KEY,
-        accept: "application/json",
-      },
-    });
+  const [allUserProcessedTransactions, setAllUserProcessedTransactions] =
+    useState([]);
+  const [activelyHeldSeedIds, setActivelyHeldSeedIds] = useState([]);
+  const [recentBorrowsTotalPackets, setRecentBorrowsTotalPackets] = useState(0);
 
-    if (!res.ok) {
-      throw new Error("Error fetching user");
-      console.log(res);
+  const [branches, setBranches] = useState([]);
+  const [selectedBranchId, setSelectedBranchId] = useState("");
+
+  const [seedsAvailableForSelection, setSeedsAvailableForSelection] = useState(
+    []
+  );
+  const [selectedSeedsAndQuantities, setSelectedSeedsAndQuantities] = useState(
+    []
+  );
+
+  const [loading, setLoading] = useState(false);
+  const [pageError, setPageError] = useState("");
+  const [formError, setFormError] = useState("");
+  const [successMessage, setSuccessMessage] = useState("");
+
+  const performCardLookup = async (cardToLookup) => {
+    if (
+      !cardToLookup.trim() ||
+      cardToLookup.trim().length !== 14 ||
+      !cardToLookup.trim().startsWith("293600")
+    ) {
+      setPageError("Invalid Library Card number provided in URL."); // Or handle silently
+      setLoading(false); // Ensure loading is stopped
+      return;
     }
-    const data = await res.json();
-    // Return the first user, or null if not found
-    return data.list && data.list.length > 0 ? data.list[0] : null;
-  }
 
-  async function fetchSeeds() {
-    const url = `${process.env.NEXT_PUBLIC_NOCO_BASE_URL}/tables/${process.env.NEXT_PUBLIC_NOCO_SEED_TABLE_ID}/records?`;
-    const res = await fetch(url, {
-      headers: {
-        "xc-token": process.env.NEXT_PUBLIC_NOCO_API_KEY,
-        accept: "application/json",
-      },
-    });
-    if (!res.ok) {
-      throw new Error("Error fetching seeds");
-      console.log(res);
-    }
-    const data = await res.json();
-    return data.list;
-  }
-
-  // Helper to get seed name by Id
-  function getSeedName(seedId) {
-    if (!seed) return `Seed ${seedId}`;
-    const found = seed.find((s) => s.Id === seedId);
-    return `${found?.Type},${found?.["Full name"]}`;
-  }
-
-  async function handleLookup(e) {
-    e.preventDefault();
     setLoading(true);
-    setError("");
+    setPageError("");
+    setFormError("");
+    setSuccessMessage("");
     setUser(null);
-    setSeeds(null);
+    setAllUserProcessedTransactions([]);
+    setActivelyHeldSeedIds([]);
+    setRecentBorrowsTotalPackets(0);
+    setSelectedBranchId("");
+    setSeedsAvailableForSelection([]);
+    setSelectedSeedsAndQuantities([]);
 
     try {
-      const foundUser = await fetchUserByphoneNumber(phoneNumber);
-      const foundSeeds = await fetchSeeds();
-      if (foundUser) setUser(foundUser);
-      if (foundSeeds) setSeeds(foundSeeds);
-      if (!foundUser && !foundSeeds) {
-        setError("Failed to Fetch User/Seeds");
+      const foundUser = await fetchUserByLibraryCard(cardToLookup.trim());
+      if (!foundUser) {
+        setPageError(
+          "User not found for the provided Library Card. Please try again or register."
+        );
+        setStep(1); // Revert to step 1 to allow manual input if param lookup fails
+        setLibraryCardInput(""); // Clear input if lookup failed
+        setLoading(false);
+        return;
       }
-    } catch (err) {
-      setError("Failed to fetch user.");
-    }
-    setLoading(false);
-  }
-
-  // Simple update on checkbox change
-  const handleSeedChange = (seedId) => {
-    setSelectedSeeds((prev) =>
-      prev.includes(seedId)
-        ? prev.filter((id) => id !== seedId)
-        : [...prev, seedId]
-    );
-  };
-
-  function isWithinLastMonth(dateString) {
-    if (!dateString) return false;
-    const now = new Date();
-    const date = new Date(dateString);
-    const diff = now - date;
-    return diff < 30 * 24 * 60 * 60 * 1000; // less than 30 days
-  }
-
-  async function handleFormSubmit(e) {
-    e.preventDefault();
-
-    const previousSeeds = user._nc_m2m_User_Seeds
-      ? user._nc_m2m_User_Seeds.map((s) => s.Seed_id)
-      : [];
-    const lastBorrowDate = user.UpdatedAt ? user.UpdatedAt.split(" ")[0] : null;
-    const alreadyBorrowedRecently = isWithinLastMonth(lastBorrowDate);
-
-    const totalSeedsThisMonth = selectedSeeds.length;
-
-    if (alreadyBorrowedRecently && totalSeedsThisMonth >= 3) {
-      alert("You may only borrow up to 3 seeds per month.");
-      return;
-    }
-    if (!alreadyBorrowedRecently && totalSeedsThisMonth > 3) {
-      alert("You may only borrow up to 3 seeds at a time.");
-      return;
-    }
-    if (!selectedSeeds.length) {
-      alert("Please select at least one seed.");
-      return;
-    }
-    setLoading(true);
-    const seedsToDelete = previousSeeds.filter(
-      (id) => !selectedSeeds.includes(id)
-    );
-    const seedsToAdd = selectedSeeds; // This will replace current selection in NocoDB relation
-
-    const linkUrl = `${process.env.NEXT_PUBLIC_NOCO_BASE_URL}/tables/${process.env.NEXT_PUBLIC_NOCO_USER_TABLE_ID}/links/${process.env.NEXT_PUBLIC_NOCO_SEED_LINK_ID}/records/${user.Id}`;
-
-    try {
-      const postRes = await fetch(linkUrl, {
-        method: "POST",
-        headers: {
-          "xc-token": process.env.NEXT_PUBLIC_NOCO_API_KEY,
-          "Content-Type": "application/json",
-          accept: "application/json",
-        },
-        body: JSON.stringify(seedsToAdd.map((id) => ({ Id: id }))),
-      });
-
-      if (postRes.ok || postRes.status === 201) {
-        // 3. Delete any seeds the user *used* to have, but didn't reselect
-        if (seedsToDelete.length > 0) {
-          const deleteRes = await fetch(linkUrl, {
-            method: "DELETE",
-            headers: {
-              "xc-token": process.env.NEXT_PUBLIC_NOCO_API_KEY,
-              "Content-Type": "application/json",
-              accept: "application/json",
-            },
-            body: JSON.stringify(seedsToDelete.map((id) => ({ Id: id }))),
-          });
-        }
-        alert("Your seeds have been updated!");
-        router.push("/");
-      } else {
-        alert("Something went wrong updating your seeds.");
+      if (isDateExpired(foundUser.LibraryCardExpiration)) {
+        setUser(foundUser);
+        setPageError("The provided library card has expired. Please renew it.");
+        setStep(1); // Revert to step 1
+        setLibraryCardInput(""); // Clear input
+        setLoading(false);
+        return;
       }
+      setUser(foundUser);
+
+      const processedTxs = processUserBorrowedData(
+        foundUser.SeedsBorrowed || [],
+        foundUser.QuantityBorrowed || [],
+        foundUser.BranchesBorrowed || [],
+        foundUser.TransactionDates || [],
+        foundUser.TransactionStatuses || [] // Assuming you might add this
+      );
+      setAllUserProcessedTransactions(processedTxs);
+      setActivelyHeldSeedIds(getActivelyHeldSeedIds(processedTxs));
+      setRecentBorrowsTotalPackets(countRecentBorrows(processedTxs));
+
+      setStep(2); // Move to branch selection
     } catch (err) {
-      console.log(err);
-      alert("Error during submission.");
+      console.error("Lookup failed (performCardLookup):", err);
+      setPageError(err.message || "Error during account lookup.");
+      setStep(1); // Revert to step 1
+      setLibraryCardInput(""); // Clear input
     } finally {
       setLoading(false);
     }
-  }
+  };
+
+  // Fetch all branches for the dropdown on component mount
+  useEffect(() => {
+    async function loadBranches() {
+      setLoading(true); // For initial branch load indication
+      try {
+        const branchesData = await fetchAllBranches();
+        setBranches(branchesData || []);
+      } catch (err) {
+        console.error("Failed to fetch branches:", err);
+        setPageError(
+          "Could not load branch information. Please try refreshing."
+        );
+      } finally {
+        setLoading(false);
+      }
+    }
+    loadBranches();
+  }, []);
+
+  useEffect(() => {
+    const cardFromQuery = searchParams.get("card");
+    if (cardFromQuery) {
+      setLibraryCardInput(cardFromQuery);
+      performCardLookup(cardFromQuery);
+    }
+  }, [searchParams]);
+
+  // Fetch available seeds when a branch is selected
+  useEffect(() => {
+    if (selectedBranchId && user) {
+      async function loadSeedsForBranch() {
+        setLoading(true); // For seed loading indication
+        setFormError("");
+        setSeedsAvailableForSelection([]);
+        try {
+          const inventoryRecords = await fetchAvailableSeedsAtInventory(
+            selectedBranchId
+          );
+          if (!inventoryRecords || inventoryRecords.length === 0) {
+            setFormError("No seeds currently in inventory at this branch.");
+            setLoading(false);
+            return;
+          }
+
+          const seedIdsInInventory = Array.from(
+            new Set(inventoryRecords.map((inv) => inv.Seeds_id))
+          );
+          console.log("Seed Ids: ", seedIdsInInventory);
+          if (seedIdsInInventory.length === 0) {
+            setFormError(
+              "No distinct seeds found in inventory for this branch."
+            );
+            setLoading(false);
+            return;
+          }
+
+          const seedDetailsList = await fetchSeedDetailsByIds(
+            seedIdsInInventory
+          );
+          console.log("Seed Details from API for those IDs:", seedDetailsList);
+          console.log(inventoryRecords);
+          const combinedAndFiltered = inventoryRecords.map((invRecord) => {
+            const detail = seedDetailsList.find(
+              (s) => s.Id === invRecord.Seeds_id
+            );
+            if (!detail) return null;
+            return {
+              SeedId: detail.Id,
+              SeedName: detail.SeedName,
+              SeedType: detail.SeedType,
+              QuantityAtBranch: invRecord.QuantityAtBranch,
+              SeedInventoryId: invRecord.Id,
+            };
+          });
+
+          setSeedsAvailableForSelection(combinedAndFiltered);
+          if (combinedAndFiltered.length === 0) {
+            if (inventoryRecords.length > 0) {
+              // Implies all available are already held or out of stock (though gt 0 filter should catch this)
+              setFormError(
+                "All available seeds at this branch are already held by you or have run out for new borrows."
+              );
+            } else {
+              // This case should be caught by inventoryRecords.length === 0 above
+              setFormError(
+                "No new seeds available for you at this branch currently."
+              );
+            }
+          }
+        } catch (err) {
+          console.error("Failed to fetch seeds for branch:", err);
+          setFormError("Could not load seeds for the selected branch.");
+        } finally {
+          setLoading(false);
+        }
+      }
+      loadSeedsForBranch();
+    } else {
+      setSeedsAvailableForSelection([]);
+    }
+  }, [selectedBranchId, user, activelyHeldSeedIds]);
+
+  const handleLibraryCardLookup = async (e) => {
+    e.preventDefault();
+    if (libraryCardInput) {
+      performCardLookup(libraryCardInput);
+    } else {
+      setPageError("Please enter a Library Card number");
+    }
+  };
+
+  const handleBranchSelect = (branchId) => {
+    setSelectedBranchId(branchId);
+    setSelectedSeedsAndQuantities([]);
+    setFormError("");
+    setSeedsAvailableForSelection([]);
+    if (branchId) {
+      setStep(3);
+    } else {
+      setSeedsAvailableForSelection([]); // Clear seeds if "--Select--" is chosen
+      setStep(2); // Go back to branch selection UI part if "select branch" is chosen
+    }
+  };
+
+  const handleQuantityChange = (seedId, change) => {
+    setSelectedSeedsAndQuantities((prevSelected) => {
+      const existingSeed = prevSelected.find((s) => s.seedId === seedId);
+      const seedInfo = seedsAvailableForSelection.find(
+        (s) => s.SeedId === seedId
+      ); // Get max quantity (QuantityAtBranch)
+
+      if (existingSeed) {
+        let newQuantity = existingSeed.quantityToBorrow + change;
+        if (newQuantity <= 0) {
+          // Remove if quantity is 0 or less
+          return prevSelected.filter((s) => s.seedId !== seedId);
+        }
+        if (newQuantity > seedInfo.QuantityAtBranch) {
+          newQuantity = seedInfo.QuantityAtBranch; // Cap at available
+        }
+        return prevSelected.map((s) =>
+          s.seedId === seedId ? { ...s, quantityToBorrow: newQuantity } : s
+        );
+      } else if (change > 0 && seedInfo) {
+        // Add new seed if change is positive and seedInfo exists
+        return [
+          ...prevSelected,
+          {
+            seedId: seedInfo.SeedId,
+            seedName: seedInfo.SeedName,
+            seedType: seedInfo.SeedType,
+            quantityToBorrow: 1, // Start with 1
+            maxQuantity: seedInfo.QuantityAtBranch,
+            seedInventoryId: seedInfo.SeedInventoryId,
+          },
+        ];
+      }
+      return prevSelected; // No change
+    });
+  };
+
+  const getTotalSelectedPackets = () => {
+    return selectedSeedsAndQuantities.reduce(
+      (sum, seed) => sum + seed.quantityToBorrow,
+      0
+    );
+  };
+
+  const handleBorrowSubmit = async (e) => {
+    e.preventDefault();
+    setFormError("");
+    const totalSelectedPackets = getTotalSelectedPackets();
+
+    if (totalSelectedPackets === 0) {
+      setFormError("Please select at least one seed packet to borrow.");
+      return;
+    }
+    if (recentBorrowsTotalPackets + totalSelectedPackets > 3) {
+      setFormError(
+        `You've already borrowed ${recentBorrowsTotalPackets} packet(s) recently. With this selection of ${totalSelectedPackets}, you would exceed the limit of 3 packets per 30 days. You can borrow ${Math.max(
+          0,
+          3 - recentBorrowsTotalPackets
+        )} more packet(s).`
+      );
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const pickupData = {
+        UserId: user.Id,
+        LibraryCard: user.LibraryCard,
+        UserFullName: user.FullName,
+        RequestTimestamp: new Date().toISOString(),
+        Status: "Pending",
+        BranchId: parseInt(selectedBranchId), // Store the branch where request was made
+        BranchName:
+          branches.find((b) => b.Id === parseInt(selectedBranchId))
+            ?.BranchName || "N/A", // Denormalized
+      };
+
+      const itemsData = selectedSeedsAndQuantities.map((item) => ({
+        SeedId: item.seedId,
+        SeedName: item.seedName, // Denormalized
+        SeedType: item.seedType, // Denormalized
+        QuantityToDispense: item.quantityToBorrow,
+      }));
+
+      await createPendingPickupRequest(pickupData, itemsData);
+
+      setSuccessMessage(
+        `Your request for ${totalSelectedPackets} seed packet(s) has been submitted! Please visit the library desk to complete your borrow.`
+      );
+      // Reset relevant parts of the form for a new interaction or if they stay on page
+      setSelectedSeedsAndQuantities([]);
+
+      // To update the UI to reflect the new "pending" state for recent borrows, re-fetch user.
+      // This is important so `recentBorrowsTotalPackets` isn't immediately wrong if they try to borrow more
+      // *before* staff processes the pending request.
+      // However, the "pending" request isn't a "borrow" yet. This needs careful thought.
+      // For now, we assume the "3 per month" is for *completed* borrows.
+      // The staff UI will handle the limit enforcement at pickup.
+      setStep(4);
+      setTimeout(() => {
+        if (pathname.startsWith("/borrow")) {
+          router.push("/");
+        }
+      }, 10000);
+      setSelectedSeedsAndQuantities([]);
+    } catch (err) {
+      console.error("Failed to submit borrow request:", err);
+      setFormError(
+        err.message || "Could not submit your request. Please try again."
+      );
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const resetFlow = () => {
+    setStep(1);
+    setLibraryCardInput("");
+    setUser(null);
+    setPageError("");
+    setFormError("");
+    setSuccessMessage("");
+    setAllUserProcessedTransactions([]);
+    setActivelyHeldSeedIds([]);
+    setRecentBorrowsTotalPackets(0);
+    setSelectedBranchId("");
+    setSeedsAvailableForSelection([]);
+    setSelectedSeedsAndQuantities([]);
+  };
 
   return (
-    <main className="min-h-screen bg-green-light flex flex-col items-center justify-center px-4">
-      <div className="w-full max-w-md flex flex-col items-center gap-8">
-        <Image
-          src={edisonLogo}
-          alt="Edison Public Library Logo"
-          width={200}
-          height={200}
-          className="rounded-full"
-        />
-        <h1 className="text-3xl md:text-4xl font-bold text-green-dark text-center">
-          Borrow More Seeds
-        </h1>
+    <main className="min-h-screen bg-green-50 flex flex-col items-center justify-center px-4 py-12">
+      <div className="w-full max-w-xl bg-white p-6 md:p-8 lg:p-10 rounded-xl shadow-2xl">
+        <div className="text-center mb-12">
+          <Image
+            src={seedLogo}
+            alt="Edison Public Library Logo"
+            width={500}
+            height={500}
+            md-width={120}
+            md-height={120}
+            className="rounded-full mx-auto"
+            priority
+          />
+          <h1 className="text-2xl md:text-3xl lg:text-4xl font-bold text-green-dark">
+            Borrow Seeds
+          </h1>
+        </div>
 
-        {!user ? (
-          <form onSubmit={handleLookup} className="w-full flex flex-col gap-4">
-            <label
-              htmlFor="phoneNumber"
-              className="text-lg font-semibold text-green-dark"
-            >
-              Phone Number
-            </label>
-            <input
-              id="phoneNumber"
-              type="text"
-              required
-              value={phoneNumber}
-              onChange={(e) => setphoneNumber(e.target.value)}
-              className="p-4 rounded-lg border-2 border-black text-lg"
-              placeholder="Enter your phone number"
-            />
+        {/* General Page Error (e.g., failed to load branches or critical lookup error) */}
+        {pageError && (step === 1 || (step > 1 && !user)) && (
+          <div className="mb-4 p-3 bg-red-100 text-red-700 rounded-md text-center text-sm md:text-base">
+            {pageError}
+          </div>
+        )}
+        {successMessage && (
+          <div className="mb-4 p-3 bg-green-100 text-green-700 rounded-md text-center text-sm md:text-base">
+            {successMessage}
+          </div>
+        )}
+
+        {/* Step 1: Library Card Lookup */}
+        {step === 1 && !successMessage && (!user || pageError) && (
+          <form
+            onSubmit={handleLibraryCardLookup}
+            className="space-y-4 md:space-y-6"
+          >
+            <div>
+              <label
+                htmlFor="libraryCardInput"
+                className="block text-md md:text-lg font-medium text-gray-700 mb-1"
+              >
+                Library Card Number
+              </label>
+              <input
+                type="text"
+                id="libraryCardInput"
+                value={libraryCardInput}
+                onChange={(e) => {
+                  setLibraryCardInput(e.target.value);
+                  setPageError(""); /* Clear error on type */
+                }}
+                className="w-full p-3 text-md md:text-lg border border-gray-300 rounded-md shadow-sm focus:ring-green-500 focus:border-green-500"
+                placeholder="Enter 14-digit card number"
+                required
+              />
+            </div>
+            {/* Display pageError related to card input here if it's specifically for this step and not a global one */}
+            {pageError && (
+              <p className="text-red-500 text-sm text-center">{pageError}</p>
+            )}
             <button
               type="submit"
-              className="w-full py-4 rounded-xl text-xl font-semibold bg-black text-white shadow-md"
               disabled={loading}
+              className="w-full py-3 text-md md:text-xl font-semibold text-white bg-black rounded-xl shadow-md hover:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-black disabled:opacity-60"
             >
-              {loading ? "Looking up..." : "Find My Account"}
+              {loading ? "Verifying..." : "Find My Account"}
             </button>
-
-            {error && <p className="text-red-600">{error}</p>}
+            <button
+              type="button"
+              onClick={() => {
+                router.push("/");
+                resetFlow();
+              }}
+              disabled={loading}
+              className="w-full py-3 text-md md:text-xl font-semibold text-green-dark border-2 border-green-medium rounded-xl shadow-md hover:bg-green-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-dark transition"
+            >
+              Back to Home
+            </button>
           </form>
-        ) : (
-          <div className="w-full flex flex-col gap-4">
-            <h2 className="text-xl font-bold text-green-dark mt-6">
-              Welcome, {user["Full Name"]} !
-            </h2>
-            <p className="text-lg">&bull; Email: {user.Email}</p>
-            <p className="text-lg">
-              &bull; Library Card: {user["Library card"]}
-            </p>
-            <p className="text-lg mb-6">
-              &bull; Last borrow: {user["UpdatedAt"].split(" ")[0]}
-            </p>
-            {user && (
-              <div className="w-full">
-                <label className="block text-lg font-semibold text-green-dark mb-2">
-                  Previously Borrowed Seeds
-                </label>
-                <div className="flex flex-col gap-2 max-h-36 overflow-y-auto border border-green-medium rounded-md p-2 bg-white">
-                  {user._nc_m2m_User_Seeds &&
-                  user._nc_m2m_User_Seeds.length > 0 ? (
-                    user._nc_m2m_User_Seeds.map((seedLink) => (
-                      <div key={seedLink.Seed_id} className="text-lg">
-                        {getSeedName(seedLink.Seed_id)}
-                      </div>
-                    ))
-                  ) : (
-                    <div className="text-gray-500 text-base">
-                      No seeds previously borrowed.
-                    </div>
-                  )}
+        )}
+
+        {loading && !user && step === 1 && (
+          <p className="text-center text-lg text-gray-600">
+            Looking up account...
+          </p>
+        )}
+
+        {/* Steps 2 & 3: User Info, Branch, and Seed Selection */}
+        {user && step >= 2 && !successMessage && !pageError && (
+          <div className="space-y-4 md:space-y-6">
+            {/* User Info Display */}
+            <div className="p-3 md:p-4 border border-gray-200 rounded-md bg-gray-50 text-sm md:text-base">
+              <h2 className="text-xl md:text-2xl font-semibold text-green-dark mb-1 md:mb-2">
+                Welcome, {user.FullName}!
+              </h2>
+              <p className="text-gray-600">
+                Card: {user.LibraryCard} (Expires:{" "}
+                {formatDate(user.LibraryCardExpiration)})
+              </p>
+              <p className="text-gray-600">
+                Your Registered Branch:{" "}
+                {user.RegisteredAtBranch?.BranchName || "N/A"}
+              </p>
+              <p className="text-gray-600">
+                Actively Held Seed Types: {activelyHeldSeedIds.length}
+              </p>
+              <p className="font-semibold text-gray-700">
+                Seeds/Packets Borrowed in last 30 days:{" "}
+                {recentBorrowsTotalPackets} (Max 3 allowed)
+              </p>
+            </div>
+            {allUserProcessedTransactions.length > 0 && (
+              <div className="mt-4 md:mt-6">
+                <h3 className="text-lg md:text-xl font-semibold text-green-dark mb-2">
+                  Your Borrow History (Last 30 transactions)
+                </h3>
+                <div className="overflow-x-auto max-h-60 border border-gray-200 rounded-md">
+                  <table className="min-w-full divide-y divide-gray-200 text-sm md:text-base">
+                    <thead className="bg-gray-50 sticky top-0">
+                      <tr>
+                        <th
+                          scope="col"
+                          className="px-3 py-2 text-left font-medium text-gray-500 tracking-wider"
+                        >
+                          Date
+                        </th>
+                        <th
+                          scope="col"
+                          className="px-3 py-2 text-left font-medium text-gray-500 tracking-wider"
+                        >
+                          Seed Name
+                        </th>
+                        <th
+                          scope="col"
+                          className="px-3 py-2 text-left font-medium text-gray-500 tracking-wider"
+                        >
+                          Type
+                        </th>
+                        <th
+                          scope="col"
+                          className="px-3 py-2 text-left font-medium text-gray-500 tracking-wider"
+                        >
+                          Qty
+                        </th>
+                        <th
+                          scope="col"
+                          className="px-3 py-2 text-left font-medium text-gray-500 tracking-wider"
+                        >
+                          Branch
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody className="bg-white divide-y divide-gray-200">
+                      {allUserProcessedTransactions.slice(0, 30).map(
+                        (
+                          tx,
+                          index // Show up to 30
+                        ) => (
+                          <tr key={`${tx.seedId}-${tx.date}-${index}`}>
+                            <td className="px-3 py-2 whitespace-nowrap">
+                              {formatDate(tx.date)}
+                            </td>
+                            <td className="px-3 py-2 whitespace-nowrap">
+                              {tx.seedName}
+                            </td>
+                            <td className="px-3 py-2 whitespace-nowrap">
+                              {tx.seedType}
+                            </td>
+                            <td className="px-3 py-2 whitespace-nowrap">
+                              {tx.quantity}
+                            </td>
+                            <td className="px-3 py-2 whitespace-nowrap">
+                              {tx.branchName}
+                            </td>
+                          </tr>
+                        )
+                      )}
+                    </tbody>
+                  </table>
                 </div>
               </div>
             )}
 
-            {/* ---- Seeds & Interests Form ---- */}
-            <form
-              onSubmit={handleFormSubmit}
-              className="flex flex-col gap-6 mt-4"
-            >
-              {/* Seeds */}
-              <div>
-                <label className="block text-lg font-semibold text-green-dark mb-2">
-                  Seeds
-                </label>
-                <div className="flex flex-col gap-2 max-h-56 overflow-y-auto border border-green-medium rounded-md p-2 bg-white">
-                  {seed &&
-                    seed.map((seedOption) => (
-                      <label
-                        key={seedOption.Id}
-                        className="flex items-center gap-2 text-lg"
-                      >
-                        <input
-                          type="checkbox"
-                          value={seedOption.Id}
-                          checked={selectedSeeds.includes(seedOption.Id)}
-                          onChange={() => handleSeedChange(seedOption.Id)}
-                          className="w-5 h-5 accent-green-medium"
-                        />
-                        {seedOption["Full Name"] ||
-                          seedOption["name"] ||
-                          `${seedOption.Type}, ${seedOption["Full name"]}`}
-                      </label>
-                    ))}
-                </div>
+            {pageError && (
+              <div className="p-3 bg-red-100 text-red-700 rounded-md text-center text-sm md:text-base">
+                {pageError}
               </div>
+            )}
 
-              {/* Submit button */}
-              <button
-                type="submit"
-                className="w-full mt-12 py-4 rounded-xl text-xl font-semibold bg-black text-white shadow-md"
-              >
-                Submit
-              </button>
-            </form>
+            {/* Branch Selection Dropdown - only if card is not expired and no overriding page error */}
+            {!pageError && !isDateExpired(user.LibraryCardExpiration) && (
+              <div>
+                <label
+                  htmlFor="branchSelect"
+                  className="block text-md md:text-lg font-medium text-gray-700 mb-1"
+                >
+                  Select Branch to Borrow From:
+                </label>
+                <select
+                  id="branchSelect"
+                  value={selectedBranchId}
+                  onChange={(e) => handleBranchSelect(e.target.value)}
+                  className="w-full p-3 text-md md:text-lg border border-gray-300 rounded-md shadow-sm bg-white focus:ring-green-500 focus:border-green-500"
+                  disabled={branches.length === 0 || loading}
+                >
+                  <option value="">-- Select a Library Branch --</option>
+                  {branches.map((branch) => (
+                    <option key={branch.Id} value={branch.Id}>
+                      {branch.BranchName}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+
+            {/* Seed Selection Form - only if branch selected, card not expired, no page error */}
+            {step === 3 &&
+              selectedBranchId &&
+              !pageError &&
+              !isDateExpired(user.LibraryCardExpiration) && (
+                <form
+                  onSubmit={handleBorrowSubmit}
+                  className="space-y-4 md:space-y-6 pt-2 md:pt-4"
+                >
+                  {loading && !seedsAvailableForSelection.length && (
+                    <p className="text-center text-gray-600 text-sm md:text-base">
+                      Loading available seeds...
+                    </p>
+                  )}
+
+                  {!loading && seedsAvailableForSelection.length > 0 && (
+                    <div>
+                      <label className="block text-lg md:text-xl font-semibold text-green-dark mb-1 md:mb-2">
+                        Available Seeds at{" "}
+                        {branches.find(
+                          (b) => b.Id === parseInt(selectedBranchId)
+                        )?.BranchName || "Selected Branch"}
+                        :
+                      </label>
+                      <div className="space-y-3 max-h-60 md:max-h-72 overflow-y-auto p-2 md:p-3 border border-gray-300 rounded-md bg-white">
+                        {seedsAvailableForSelection.map((seed) => {
+                          const currentSelection =
+                            selectedSeedsAndQuantities.find(
+                              (s) => s.seedId === seed.SeedId
+                            );
+                          const currentQuantity = currentSelection
+                            ? currentSelection.quantityToBorrow
+                            : 0;
+                          return (
+                            <div
+                              key={seed.SeedId}
+                              className="flex items-center justify-between p-2 hover:bg-green-50 rounded-md"
+                            >
+                              <div className="flex-grow">
+                                <span className="text-sm md:text-lg text-gray-800">
+                                  {seed.SeedName} ({seed.SeedType})
+                                </span>
+                                <br />
+                                <span className="text-xs text-gray-500">
+                                  Available: {seed.QuantityAtBranch} packet(s)
+                                </span>
+                              </div>
+                              <div className="flex items-center space-x-2 ml-2">
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    handleQuantityChange(seed.SeedId, -1)
+                                  }
+                                  className="p-1 h-8 w-8 md:h-10 md:w-10 rounded-full border text-lg md:text-xl font-bold bg-gray-200 hover:bg-gray-300 disabled:opacity-50"
+                                  disabled={currentQuantity === 0 || loading}
+                                >
+                                  -
+                                </button>
+                                <span className="text-md md:text-lg w-8 text-center font-medium">
+                                  {currentQuantity}
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    handleQuantityChange(seed.SeedId, 1)
+                                  }
+                                  className="p-1 h-8 w-8 md:h-10 md:w-10 rounded-full border text-lg md:text-xl font-bold bg-gray-200 hover:bg-gray-300 disabled:opacity-50"
+                                  disabled={
+                                    currentQuantity >= seed.QuantityAtBranch ||
+                                    loading
+                                  }
+                                >
+                                  +
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Form-specific errors (e.g., no seeds at branch, selection error) */}
+                  {formError && (
+                    <div className="p-3 bg-red-100 text-red-600 rounded-md text-center text-sm md:text-base">
+                      {formError}
+                    </div>
+                  )}
+
+                  {!loading &&
+                    seedsAvailableForSelection.length === 0 &&
+                    !formError &&
+                    selectedBranchId && (
+                      <p className="text-gray-600 p-3 border border-gray-200 rounded-md bg-gray-50 text-sm md:text-base">
+                        No new seeds currently available at this branch for you
+                        to borrow.
+                      </p>
+                    )}
+
+                  <button
+                    type="submit"
+                    disabled={
+                      loading ||
+                      getTotalSelectedPackets() === 0 ||
+                      recentBorrowsTotalPackets + getTotalSelectedPackets() > 3
+                    }
+                    className="w-full py-3 text-md md:text-xl font-semibold text-white bg-black rounded-xl shadow-md hover:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-black disabled:opacity-60"
+                  >
+                    {loading
+                      ? "Submitting Request..."
+                      : `Request to Borrow (${getTotalSelectedPackets()}) Packet(s)`}
+                  </button>
+                </form>
+              )}
+
+            {step === 4 && (
+              <div className="text-center space-y-6 py-10">
+                <svg
+                  className="mx-auto h-16 w-16 text-green-500"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth="2"
+                    d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"
+                  />
+                </svg>
+                <h2 className="text-2xl md:text-3xl font-semibold text-green-dark">
+                  Request Submitted!
+                </h2>
+                <p className="text-md md:text-lg text-gray-700">
+                  Your seed request has been successfully submitted. Please
+                  proceed to the library service desk to pick up your seeds.
+                </p>
+                <p className="text-sm text-gray-500">
+                  This page will redirect to the homepage in 10 seconds.
+                </p>
+                <button
+                  onClick={() => {
+                    resetFlow(); // Reset the flow fully
+                    router.push("/");
+                  }}
+                  className="w-full md:w-auto mt-4 py-3 px-8 text-md md:text-lg font-semibold text-white bg-black rounded-xl shadow-md hover:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-black"
+                >
+                  Finish
+                </button>
+              </div>
+            )}
+
+            {/* General "Start Over" button for user context */}
             <button
-              onClick={() => setUser(null)}
-              className="w-full py-4 mx-auto m-8 rounded-xl text-xl font-semibold bg-white text-black ring-2 shadow-md"
+              type="button"
+              onClick={resetFlow}
+              disabled={loading}
+              className="w-full py-3 text-md md:text-xl font-semibold text-green-dark border-2 border-green-medium rounded-xl shadow-md hover:bg-green-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-dark transition mt-3 md:mt-4"
             >
-              Look up another account
+              {step === 1 ? "Back to Home" : "Start Over / Change Card"}
             </button>
           </div>
         )}
-        <button
-          className="w-full py-4 rounded-xl text-xl font-semibold bg-white text-green-dark border-2 border-green-medium shadow-md focus:outline-none focus:ring-2 focus:ring-green-dark transition text-center block"
-          onClick={() => router.push("/")}
-        >
-          Go back
-        </button>
       </div>
     </main>
   );

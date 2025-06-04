@@ -1,40 +1,47 @@
 // app/page.tsx
 
 import Image from "next/image";
-import edisonLogo from "../public/edison-logo.png"; // Place your logo in /public
+// import edisonLogo from "../public/edison-logo.png"; // Place your logo in /public
+import seedLogo from "../public/seedLogo.jpeg"; // Place your logo in /public
 import Link from "next/link";
 
 export default function Home() {
   return (
-    <main className="min-h-screen bg-green-light flex flex-col items-center justify-around px-4">
-      <div className="w-full max-w-md flex flex-col items-center gap-12">
+    <main className="min-h-screen bg-white flex flex-col items-center justify-around px-4">
+      <div className="w-full max-w-lg flex flex-col items-center gap-12">
         <Image
-          src={edisonLogo}
+          src={seedLogo}
           alt="Edison Public Library Logo"
-          width={200}
-          height={200}
+          width={500}
+          height={500}
+          priority
           className="rounded-full"
         />
-        <h1 className="text-3xl md:text-4xl font-bold text-green-dark text-center">
+        <h1 className="text-4xl md:text-5xl font-bold text-green-dark text-center">
           Seed Library
         </h1>
-        <div className="w-full flex flex-col gap-4 mt-4">
+        <div className="w-full flex flex-col gap-5 mt-6">
           <Link
-            href="https://app.nocodb.com/p/seedlibrarynew"
+            href="/register"
+            className="w-full py-6 rounded-xl text-xl font-semibold bg-black text-white shadow-md focus:outline-none focus:ring-2 focus:ring-black transition text-center block hover:scale-105 focus:ring-offset-2 "
+            rel="noopener noreferrer"
             passHref
-            legacyBehavior
           >
-            <a
-              className="w-full py-6 rounded-xl text-xl font-semibold bg-black text-white shadow-md focus:outline-none focus:ring-2 focus:ring-green-dark transition text-center block"
-              rel="noopener noreferrer"
-            >
-              Start a new Application
-            </a>
+            Start a new Application
           </Link>
-          <Link href="/borrow" passHref legacyBehavior>
-            <a className="w-full py-6 rounded-xl text-xl font-semibold bg-white text-green-dark border-2 border-green-medium shadow-md focus:outline-none focus:ring-2 focus:ring-green-dark transition text-center block">
-              Borrow more seeds
-            </a>
+          <Link
+            href="/borrow"
+            className="w-full py-6 rounded-xl text-xl font-semibold bg-white text-green-dark border-2 border-green-medium shadow-md focus:outline-none focus:ring-2 focus:ring-black transition text-center block hover:scale-105 focus:ring-offset-2 "
+            passHref
+          >
+            Borrow more seeds
+          </Link>
+          <Link
+            href="/borrow"
+            className="w-full py-6 rounded-xl text-xl font-semibold bg-black text-white border-2 border-green-medium shadow-md focus:outline-none focus:ring-2 focus:ring-black transition text-center block hover:scale-105 focus:ring-offset-2 "
+            passHref
+          >
+            Donate Seeds
           </Link>
         </div>
       </div>
