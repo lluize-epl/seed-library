@@ -9,7 +9,7 @@ import seedLogo from "@/public/seedLogo.jpeg";
 import { fetchUserByLibraryCard } from "@/lib/noco-apis/users";
 import {
   fetchAvailableSeedsAtInventory,
-  updateSeedInventoryQuantity,
+  batchUpdateSeedInventory,
 } from "@/lib/noco-apis/seedInventory";
 import { fetchAllBranches } from "@/lib/noco-apis/branches";
 import { fetchSeedDetailsByIds } from "@/lib/noco-apis/seeds";
@@ -18,7 +18,6 @@ import { createPendingPickupRequest } from "@/lib/noco-apis/pendingPickups";
 // Utils from lib/utils.js
 import {
   formatDate,
-  isDateExpired,
   processUserBorrowedData,
   countRecentBorrows,
   getActivelyHeldSeedIds,
@@ -32,7 +31,7 @@ export default function BorrowPage() {
   const [step, setStep] = useState(1); // 1: Lookup, 2: Select Branch, 3: Select Seeds
   const [libraryCardInput, setLibraryCardInput] = useState("");
   const [user, setUser] = useState(null);
-
+  const [hasActiveHold, setHasActiveHold] = useState(false);
   const [allUserProcessedTransactions, setAllUserProcessedTransactions] =
     useState([]);
   const [activelyHeldSeedIds, setActivelyHeldSeedIds] = useState([]);
@@ -59,7 +58,7 @@ export default function BorrowPage() {
       cardToLookup.trim().length !== 14 ||
       !cardToLookup.trim().startsWith("293600")
     ) {
-      setPageError("Invalid Library Card number provided in URL."); // Or handle silently
+      setPageError("Invalid Library Card number. Are you registered?"); // Or handle silently
       setLoading(false); // Ensure loading is stopped
       return;
     }
@@ -75,6 +74,7 @@ export default function BorrowPage() {
     setSelectedBranchId("");
     setSeedsAvailableForSelection([]);
     setSelectedSeedsAndQuantities([]);
+    setHasActiveHold(false);
 
     try {
       const foundUser = await fetchUserByLibraryCard(cardToLookup.trim());
@@ -87,11 +87,18 @@ export default function BorrowPage() {
         setLoading(false);
         return;
       }
-      if (isDateExpired(foundUser.LibraryCardExpiration)) {
+
+      const pickupStatuses = foundUser.HasHold || [];
+      const userHasPendingHold = pickupStatuses.includes("Pending");
+      if (userHasPendingHold) {
         setUser(foundUser);
-        setPageError("The provided library card has expired. Please renew it.");
-        setStep(1); // Revert to step 1
-        setLibraryCardInput(""); // Clear input
+        setHasActiveHold(true);
+        setPageError(
+          // Use pageError to display this message prominently
+          `You have an existing seed request that is still "Pending". Please pick up or cancel your current hold before placing a new one.`
+        );
+        // No need to set activeHoldDetails unless HasHold provides more than just statuses
+        setStep(2); // Go to a step where this message is shown
         setLoading(false);
         return;
       }
@@ -140,7 +147,7 @@ export default function BorrowPage() {
 
   useEffect(() => {
     const cardFromQuery = searchParams.get("card");
-    if (cardFromQuery) {
+    if (cardFromQuery && !user && !loading && step === 1) {
       setLibraryCardInput(cardFromQuery);
       performCardLookup(cardFromQuery);
     }
@@ -157,6 +164,7 @@ export default function BorrowPage() {
           const inventoryRecords = await fetchAvailableSeedsAtInventory(
             selectedBranchId
           );
+
           if (!inventoryRecords || inventoryRecords.length === 0) {
             setFormError("No seeds currently in inventory at this branch.");
             setLoading(false);
@@ -166,7 +174,7 @@ export default function BorrowPage() {
           const seedIdsInInventory = Array.from(
             new Set(inventoryRecords.map((inv) => inv.Seeds_id))
           );
-          console.log("Seed Ids: ", seedIdsInInventory);
+
           if (seedIdsInInventory.length === 0) {
             setFormError(
               "No distinct seeds found in inventory for this branch."
@@ -178,8 +186,7 @@ export default function BorrowPage() {
           const seedDetailsList = await fetchSeedDetailsByIds(
             seedIdsInInventory
           );
-          console.log("Seed Details from API for those IDs:", seedDetailsList);
-          console.log(inventoryRecords);
+
           const combinedAndFiltered = inventoryRecords.map((invRecord) => {
             const detail = seedDetailsList.find(
               (s) => s.Id === invRecord.Seeds_id
@@ -195,6 +202,7 @@ export default function BorrowPage() {
           });
 
           setSeedsAvailableForSelection(combinedAndFiltered);
+
           if (combinedAndFiltered.length === 0) {
             if (inventoryRecords.length > 0) {
               // Implies all available are already held or out of stock (though gt 0 filter should catch this)
@@ -290,6 +298,8 @@ export default function BorrowPage() {
   const handleBorrowSubmit = async (e) => {
     e.preventDefault();
     setFormError("");
+    setSuccessMessage("");
+
     const totalSelectedPackets = getTotalSelectedPackets();
 
     if (totalSelectedPackets === 0) {
@@ -308,47 +318,60 @@ export default function BorrowPage() {
 
     setLoading(true);
     try {
+      // 1. Prepare data for SeedInventory PATCH (decrement)
+      const inventoryUpdates = selectedSeedsAndQuantities.map((item) => {
+        if (item.quantityToBorrow > item.maxQuantity) {
+          // Should be caught by UI, but double check
+          throw new Error(
+            `Cannot borrow ${item.quantityToBorrow} of ${item.seedName}, only ${item.maxQuantity} available.`
+          );
+        }
+        return {
+          Id: item.seedInventoryId, // PK of the SeedInventory record
+          QuantityAtBranch: item.maxQuantity - item.quantityToBorrow, // New decremented quantity
+        };
+      });
+
+      // 2. Perform batch PATCH to SeedInventory
+      await batchUpdateSeedInventory(inventoryUpdates);
+
+      // 3. If inventory update is successful, proceed to create Pending Pickup
       const pickupData = {
         UserId: user.Id,
         LibraryCard: user.LibraryCard,
         UserFullName: user.FullName,
-        RequestTimestamp: new Date().toISOString(),
-        Status: "Pending",
-        BranchId: parseInt(selectedBranchId), // Store the branch where request was made
+        BranchId: parseInt(selectedBranchId),
         BranchName:
           branches.find((b) => b.Id === parseInt(selectedBranchId))
-            ?.BranchName || "N/A", // Denormalized
+            ?.BranchName || "N/A",
       };
 
-      const itemsData = selectedSeedsAndQuantities.map((item) => ({
+      const itemsDataForPickup = selectedSeedsAndQuantities.map((item) => ({
         SeedId: item.seedId,
-        SeedName: item.seedName, // Denormalized
-        SeedType: item.seedType, // Denormalized
+        SeedName: item.seedName,
+        SeedType: item.seedType,
         QuantityToDispense: item.quantityToBorrow,
+        SeedInventoryId: item.seedInventoryId,
       }));
 
-      await createPendingPickupRequest(pickupData, itemsData);
+      await createPendingPickupRequest(pickupData, itemsDataForPickup);
 
       setSuccessMessage(
-        `Your request for ${totalSelectedPackets} seed packet(s) has been submitted! Please visit the library desk to complete your borrow.`
+        `Your hold request for ${totalSelectedPackets} seed packet(s) has been placed! Please visit the library reference desk within 2 days to pick them up.`
       );
-      // Reset relevant parts of the form for a new interaction or if they stay on page
-      setSelectedSeedsAndQuantities([]);
 
-      // To update the UI to reflect the new "pending" state for recent borrows, re-fetch user.
-      // This is important so `recentBorrowsTotalPackets` isn't immediately wrong if they try to borrow more
-      // *before* staff processes the pending request.
-      // However, the "pending" request isn't a "borrow" yet. This needs careful thought.
-      // For now, we assume the "3 per month" is for *completed* borrows.
-      // The staff UI will handle the limit enforcement at pickup.
+      setSelectedSeedsAndQuantities([]);
       setStep(4);
       setTimeout(() => {
         if (pathname.startsWith("/borrow")) {
           router.push("/");
         }
-      }, 10000);
-      setSelectedSeedsAndQuantities([]);
+      }, 15000);
     } catch (err) {
+      //! IMPORTANT: If batchUpdateSeedInventory succeeded but createPendingPickupRequest failed,
+      //! inventory is decremented but no hold record exists. This is a discrepancy.
+      // Robust error handling might involve trying to "roll back" inventory updates or flagging.
+      // For prototype, the error message is key.
       console.error("Failed to submit borrow request:", err);
       setFormError(
         err.message || "Could not submit your request. Please try again."
@@ -371,6 +394,7 @@ export default function BorrowPage() {
     setSelectedBranchId("");
     setSeedsAvailableForSelection([]);
     setSelectedSeedsAndQuantities([]);
+    setHasActiveHold(false);
   };
 
   return (
@@ -430,10 +454,7 @@ export default function BorrowPage() {
                 required
               />
             </div>
-            {/* Display pageError related to card input here if it's specifically for this step and not a global one */}
-            {pageError && (
-              <p className="text-red-500 text-sm text-center">{pageError}</p>
-            )}
+
             <button
               type="submit"
               disabled={loading}
@@ -461,139 +482,177 @@ export default function BorrowPage() {
           </p>
         )}
 
-        {/* Steps 2 & 3: User Info, Branch, and Seed Selection */}
-        {user && step >= 2 && !successMessage && !pageError && (
-          <div className="space-y-4 md:space-y-6">
-            {/* User Info Display */}
-            <div className="p-3 md:p-4 border border-gray-200 rounded-md bg-gray-50 text-sm md:text-base">
-              <h2 className="text-xl md:text-2xl font-semibold text-green-dark mb-1 md:mb-2">
-                Welcome, {user.FullName}!
-              </h2>
-              <p className="text-gray-600">
-                Card: {user.LibraryCard} (Expires:{" "}
-                {formatDate(user.LibraryCardExpiration)})
-              </p>
-              <p className="text-gray-600">
-                Your Registered Branch:{" "}
-                {user.RegisteredAtBranch?.BranchName || "N/A"}
-              </p>
-              <p className="text-gray-600">
-                Actively Held Seed Types: {activelyHeldSeedIds.length}
-              </p>
-              <p className="font-semibold text-gray-700">
-                Seeds/Packets Borrowed in last 30 days:{" "}
-                {recentBorrowsTotalPackets} (Max 3 allowed)
-              </p>
+        {user &&
+          step >= 2 &&
+          !successMessage &&
+          pageError && ( // <<< MODIFIED: Show this if there's a user AND pageError
+            <div className="my-4 p-4 bg-yellow-100 text-yellow-800 border-l-4 border-yellow-500 rounded-md shadow">
+              <h3 className="text-lg font-semibold mb-1">Important Notice:</h3>
+              <p>{pageError}</p>{" "}
+              {/* pageError will contain the "active hold" message or "expired" message */}
+              {hasActiveHold && ( // Only show "Go Home" if it was an active hold message
+                <button
+                  onClick={() => router.push("/")}
+                  className="mt-3 py-2 px-4 text-sm font-medium text-white bg-yellow-600 rounded-md hover:bg-yellow-700"
+                >
+                  Okay, Start Over
+                </button>
+              )}
+              {!hasActiveHold &&
+                pageError.toLowerCase().includes("expired") && ( // If error was card expired
+                  <button
+                    onClick={resetFlow}
+                    className="mt-3 btn-secondary-outline text-sm"
+                  >
+                    Try Different Card
+                  </button>
+                )}
             </div>
-            {allUserProcessedTransactions.length > 0 && (
-              <div className="mt-4 md:mt-6">
-                <h3 className="text-lg md:text-xl font-semibold text-green-dark mb-2">
-                  Your Borrow History (Last 30 transactions)
-                </h3>
-                <div className="overflow-x-auto max-h-60 border border-gray-200 rounded-md">
-                  <table className="min-w-full divide-y divide-gray-200 text-sm md:text-base">
-                    <thead className="bg-gray-50 sticky top-0">
-                      <tr>
-                        <th
-                          scope="col"
-                          className="px-3 py-2 text-left font-medium text-gray-500 tracking-wider"
-                        >
-                          Date
-                        </th>
-                        <th
-                          scope="col"
-                          className="px-3 py-2 text-left font-medium text-gray-500 tracking-wider"
-                        >
-                          Seed Name
-                        </th>
-                        <th
-                          scope="col"
-                          className="px-3 py-2 text-left font-medium text-gray-500 tracking-wider"
-                        >
-                          Type
-                        </th>
-                        <th
-                          scope="col"
-                          className="px-3 py-2 text-left font-medium text-gray-500 tracking-wider"
-                        >
-                          Qty
-                        </th>
-                        <th
-                          scope="col"
-                          className="px-3 py-2 text-left font-medium text-gray-500 tracking-wider"
-                        >
-                          Branch
-                        </th>
-                      </tr>
-                    </thead>
-                    <tbody className="bg-white divide-y divide-gray-200">
-                      {allUserProcessedTransactions.slice(0, 30).map(
-                        (
-                          tx,
-                          index // Show up to 30
-                        ) => (
-                          <tr key={`${tx.seedId}-${tx.date}-${index}`}>
-                            <td className="px-3 py-2 whitespace-nowrap">
-                              {formatDate(tx.date)}
-                            </td>
-                            <td className="px-3 py-2 whitespace-nowrap">
-                              {tx.seedName}
-                            </td>
-                            <td className="px-3 py-2 whitespace-nowrap">
-                              {tx.seedType}
-                            </td>
-                            <td className="px-3 py-2 whitespace-nowrap">
-                              {tx.quantity}
-                            </td>
-                            <td className="px-3 py-2 whitespace-nowrap">
-                              {tx.branchName}
-                            </td>
-                          </tr>
-                        )
-                      )}
-                    </tbody>
-                  </table>
+          )}
+
+        {/* Steps 2 & 3: User Info, Branch, and Seed Selection */}
+        {user &&
+          step >= 2 &&
+          !successMessage &&
+          !pageError &&
+          !hasActiveHold && (
+            <div className="space-y-4 md:space-y-6">
+              {/* User Info Display */}
+              <div className="p-3 md:p-4 border border-gray-200 rounded-md bg-gray-50 text-sm md:text-base">
+                <h2 className="text-xl md:text-2xl font-semibold text-green-dark mb-1 md:mb-2">
+                  Welcome, {user.FullName}!
+                </h2>
+                <p className="text-gray-600">Card: {user.LibraryCard}</p>
+                <p className="text-gray-600">
+                  Your Registered Branch:{" "}
+                  {user.RegisteredAtBranch?.BranchName || "N/A"}
+                </p>
+                <p className="text-gray-600">
+                  Actively Held Seed Types: {activelyHeldSeedIds.length}
+                </p>
+                <p className="font-semibold text-gray-700">
+                  Seeds/Packets Borrowed in last 30 days:{" "}
+                  {recentBorrowsTotalPackets} (Max 3 allowed)
+                </p>
+              </div>
+              {allUserProcessedTransactions.length > 0 && (
+                <div className="mt-4 md:mt-6">
+                  <h3 className="text-lg md:text-xl font-semibold text-green-dark mb-2">
+                    Your Borrow History (Last 30 transactions)
+                  </h3>
+                  <div className="overflow-x-auto max-h-60 border border-gray-200 rounded-md">
+                    <table className="min-w-full divide-y divide-gray-200 text-sm md:text-base">
+                      <thead className="bg-gray-50 sticky top-0">
+                        <tr>
+                          <th
+                            scope="col"
+                            className="px-3 py-2 text-left font-medium text-gray-500 tracking-wider"
+                          >
+                            Date
+                          </th>
+                          <th
+                            scope="col"
+                            className="px-3 py-2 text-left font-medium text-gray-500 tracking-wider"
+                          >
+                            Seed Name
+                          </th>
+                          <th
+                            scope="col"
+                            className="px-3 py-2 text-left font-medium text-gray-500 tracking-wider"
+                          >
+                            Type
+                          </th>
+                          <th
+                            scope="col"
+                            className="px-3 py-2 text-left font-medium text-gray-500 tracking-wider"
+                          >
+                            Qty
+                          </th>
+                          <th
+                            scope="col"
+                            className="px-3 py-2 text-left font-medium text-gray-500 tracking-wider"
+                          >
+                            Branch
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody className="bg-white divide-y divide-gray-200">
+                        {allUserProcessedTransactions.slice(0, 30).map(
+                          (
+                            tx,
+                            index // Show up to 30
+                          ) => (
+                            <tr key={`${tx.seedId}-${tx.date}-${index}`}>
+                              <td className="px-3 py-2 whitespace-nowrap">
+                                {formatDate(tx.date)}
+                              </td>
+                              <td className="px-3 py-2 whitespace-nowrap">
+                                {tx.seedName}
+                              </td>
+                              <td className="px-3 py-2 whitespace-nowrap">
+                                {tx.seedType}
+                              </td>
+                              <td className="px-3 py-2 whitespace-nowrap">
+                                {tx.quantity}
+                              </td>
+                              <td className="px-3 py-2 whitespace-nowrap">
+                                {tx.branchName}
+                              </td>
+                            </tr>
+                          )
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
                 </div>
-              </div>
-            )}
+              )}
 
-            {pageError && (
-              <div className="p-3 bg-red-100 text-red-700 rounded-md text-center text-sm md:text-base">
-                {pageError}
-              </div>
-            )}
+              {pageError && (
+                <div className="my-4 p-4 bg-yellow-100 text-yellow-800 border-l-4 border-yellow-500 rounded-md shadow">
+                  <h3 className="text-lg font-semibold mb-1">
+                    Important Notice:
+                  </h3>
+                  <p>{pageError}</p>{" "}
+                  {/* pageError will contain the "active hold" message */}
+                  {hasActiveHold && (
+                    <button
+                      onClick={() => router.push("/")} // Or a specific "View My Holds" page if you build one
+                      className="mt-3 py-2 px-4 text-sm font-medium text-white bg-yellow-600 rounded-md hover:bg-yellow-700"
+                    >
+                      Okay, Go Home
+                    </button>
+                  )}
+                </div>
+              )}
 
-            {/* Branch Selection Dropdown - only if card is not expired and no overriding page error */}
-            {!pageError && !isDateExpired(user.LibraryCardExpiration) && (
-              <div>
-                <label
-                  htmlFor="branchSelect"
-                  className="block text-md md:text-lg font-medium text-gray-700 mb-1"
-                >
-                  Select Branch to Borrow From:
-                </label>
-                <select
-                  id="branchSelect"
-                  value={selectedBranchId}
-                  onChange={(e) => handleBranchSelect(e.target.value)}
-                  className="w-full p-3 text-md md:text-lg border border-gray-300 rounded-md shadow-sm bg-white focus:ring-green-500 focus:border-green-500"
-                  disabled={branches.length === 0 || loading}
-                >
-                  <option value="">-- Select a Library Branch --</option>
-                  {branches.map((branch) => (
-                    <option key={branch.Id} value={branch.Id}>
-                      {branch.BranchName}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            )}
+              {/* Branch Selection Dropdown  */}
+              {!hasActiveHold && !pageError && (
+                <div>
+                  <label
+                    htmlFor="branchSelect"
+                    className="block text-md md:text-lg font-medium text-gray-700 mb-1"
+                  >
+                    Select Branch to Borrow From:
+                  </label>
+                  <select
+                    id="branchSelect"
+                    value={selectedBranchId}
+                    onChange={(e) => handleBranchSelect(e.target.value)}
+                    className="w-full p-3 text-md md:text-lg border border-gray-300 rounded-md shadow-sm bg-white focus:ring-green-500 focus:border-green-500"
+                    disabled={branches.length === 0 || loading}
+                  >
+                    <option value="">-- Select a Library Branch --</option>
+                    {branches.map((branch) => (
+                      <option key={branch.Id} value={branch.Id}>
+                        {branch.BranchName}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
 
-            {/* Seed Selection Form - only if branch selected, card not expired, no page error */}
-            {step === 3 &&
-              selectedBranchId &&
-              !pageError &&
-              !isDateExpired(user.LibraryCardExpiration) && (
+              {/* Seed Selection Form - no page error */}
+              {step === 3 && selectedBranchId && !pageError && (
                 <form
                   onSubmit={handleBorrowSubmit}
                   className="space-y-4 md:space-y-6 pt-2 md:pt-4"
@@ -704,54 +763,54 @@ export default function BorrowPage() {
                 </form>
               )}
 
-            {step === 4 && (
-              <div className="text-center space-y-6 py-10">
-                <svg
-                  className="mx-auto h-16 w-16 text-green-500"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth="2"
-                    d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"
-                  />
-                </svg>
-                <h2 className="text-2xl md:text-3xl font-semibold text-green-dark">
-                  Request Submitted!
-                </h2>
-                <p className="text-md md:text-lg text-gray-700">
-                  Your seed request has been successfully submitted. Please
-                  proceed to the library service desk to pick up your seeds.
-                </p>
-                <p className="text-sm text-gray-500">
-                  This page will redirect to the homepage in 10 seconds.
-                </p>
-                <button
-                  onClick={() => {
-                    resetFlow(); // Reset the flow fully
-                    router.push("/");
-                  }}
-                  className="w-full md:w-auto mt-4 py-3 px-8 text-md md:text-lg font-semibold text-white bg-black rounded-xl shadow-md hover:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-black"
-                >
-                  Finish
-                </button>
-              </div>
-            )}
+              {step === 4 && (
+                <div className="text-center space-y-6 py-10">
+                  <svg
+                    className="mx-auto h-16 w-16 text-green-500"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth="2"
+                      d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"
+                    />
+                  </svg>
+                  <h2 className="text-2xl md:text-3xl font-semibold text-green-dark">
+                    Request Submitted!
+                  </h2>
+                  <p className="text-md md:text-lg text-gray-700">
+                    Your seed request has been successfully submitted. Please
+                    proceed to the library service desk to pick up your seeds.
+                  </p>
+                  <p className="text-sm text-gray-500">
+                    This page will redirect to the homepage in 10 seconds.
+                  </p>
+                  <button
+                    onClick={() => {
+                      resetFlow(); // Reset the flow fully
+                      router.push("/");
+                    }}
+                    className="w-full md:w-auto mt-4 py-3 px-8 text-md md:text-lg font-semibold text-white bg-black rounded-xl shadow-md hover:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-black"
+                  >
+                    Finish
+                  </button>
+                </div>
+              )}
 
-            {/* General "Start Over" button for user context */}
-            <button
-              type="button"
-              onClick={resetFlow}
-              disabled={loading}
-              className="w-full py-3 text-md md:text-xl font-semibold text-green-dark border-2 border-green-medium rounded-xl shadow-md hover:bg-green-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-dark transition mt-3 md:mt-4"
-            >
-              {step === 1 ? "Back to Home" : "Start Over / Change Card"}
-            </button>
-          </div>
-        )}
+              {/* General "Start Over" button for user context */}
+              <button
+                type="button"
+                onClick={resetFlow}
+                disabled={loading}
+                className="w-full py-3 text-md md:text-xl font-semibold text-green-dark border-2 border-green-medium rounded-xl shadow-md hover:bg-green-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-dark transition mt-3 md:mt-4"
+              >
+                {step === 1 ? "Back to Home" : "Start Over / Change Card"}
+              </button>
+            </div>
+          )}
       </div>
     </main>
   );

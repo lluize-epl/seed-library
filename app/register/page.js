@@ -3,73 +3,47 @@
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import Image from "next/image";
-import seedLogo from "@/public/seedLogo.jpeg";
-import {
-  isValidPhoneNumberLength,
-  formatPhoneNumber,
-  isDateExpired,
-} from "@/lib/utils";
+import seedLogo from "@/public/seedLogo.jpeg"; // Your logo
+import { isValidPhoneNumberLength, formatPhoneNumber } from "@/lib/utils"; // Removed isDateExpired
 
-// Import API functions from your new structure
+// Import API functions
 import {
   createUser,
   linkUserInterests,
   fetchUserByLibraryCard,
-  fetchUserByPhone,
+  // fetchUserByPhone, // No longer checking phone for uniqueness on register
 } from "@/lib/noco-apis/users";
 import { fetchAllBranches } from "@/lib/noco-apis/branches";
 import { fetchAllInterests } from "@/lib/noco-apis/interests";
 
-// Mock Polaris API CALL
-async function mockFetchPolarisUserData(libraryCard) {
-  console.log(`MOCK: Calling Polaris for card: ${libraryCard}`);
-  return new Promise((resolve) => {
-    setTimeout(() => {
-      if (libraryCard === "POLARIS_VALID" || libraryCard === "29360000000000") {
-        // Test card numbers
-        resolve({
-          FullName: "Patron From Polaris",
-          Email: "polaris.patron@example.com",
-          Phone: "555-555-5555",
-          LibraryCardExpiration: "2025-12-31", // YYYY-MM-DD
-          // Other data Polaris might provide
-        });
-      } else if (
-        libraryCard === "POLARIS_EXPIRED" ||
-        libraryCard === "29360000000001"
-      ) {
-        resolve({
-          FullName: "Expired Polaris Patron",
-          Email: "expired.patron@example.com",
-          Phone: "555-555-5555",
-          LibraryCardExpiration: "2020-01-01",
-        });
-      } else {
-        resolve(null); // Simulate user not found in Polaris
-      }
-    }, 500); // Simulate network delay
-  });
-}
+const AGREEMENT_CONDITIONS = [
+  "I will borrow seeds for personal use only and will not sell or commercially distribute them.",
+  "I understand that while many seeds are viable and labeled, germination is not guaranteed.",
+  "I agree to use seeds in a responsible and ethical way that supports sustainability.",
+  "If I am able, I will attempt to save seeds from my harvest and consider donating them back to the Seed Library.",
+  "I will treat this as a shared community resource and respect the borrowing limits (e.g., 3 seed packets per month, as applicable).",
+];
 
 export default function RegisterPage() {
   const router = useRouter();
-  const [step, setStep] = useState(1); // 1: Enter Card, 2: Process/Display Form or Message
+  const [step, setStep] = useState(1); // 1: Enter Card, 2: Display Form or "Already Registered" Message
   const [libraryCardInput, setLibraryCardInput] = useState("");
-  const [polarisData, setPolarisData] = useState(null); // Data fetched from Polaris (mock)
-  const [isNocoDbUserByCard, setIsNocoDbUserByCard] = useState(false); // Flag if user already in our DB
+
+  const [existingNocoDbUser, setExistingNocoDbUser] = useState(null); // Store the fetched user if already registered
+
   const [form, setForm] = useState({
     FullName: "",
-    LibraryCard: 0,
-    LibraryCardExpiration: "", // Store as YYYY-MM-DD for date input
+    LibraryCard: "",
     Phone: "",
     Email: "",
-    PreferredContact: "Phone", // Default value
-    GardeningExperience: "Not Specified", // Default value
+    PreferredContact: "Phone",
+    GardeningExperience: "Not Specified",
     IsDonor: false,
     SignedAgreement: false,
-    branches_id: 0,
+    branches_id: "",
     Notes: "",
     SelectedInterestIds: [],
+    Status: "New",
   });
 
   const [branches, setBranches] = useState([]);
@@ -79,10 +53,8 @@ export default function RegisterPage() {
   const [formError, setFormError] = useState("");
   const [successMessage, setSuccessMessage] = useState("");
 
-  // Fetch branches and interests on component mount
   useEffect(() => {
     async function fetchDropdownData() {
-      // No setLoading here as it's a background load, form can be used before this finishes
       try {
         const [branchesData, interestsData] = await Promise.all([
           fetchAllBranches(),
@@ -92,20 +64,17 @@ export default function RegisterPage() {
         setInterests(interestsData || []);
       } catch (err) {
         console.error("Failed to fetch dropdown data:", err);
-        // Set a non-blocking error, or just log it
-        setPageError((prevError) =>
-          prevError
-            ? prevError + " Could not load some form options."
-            : "Could not load some form options."
+        setPageError(
+          "Could not load some form options. Refreshing might help."
         );
       }
     }
     fetchDropdownData();
   }, []);
 
-  // Handle Form Value changes
   const handleFormChange = (e) => {
     const { name, value, type, checked } = e.target;
+    if (name === "Phone" && formError.includes("Phone")) setFormError(""); // Clear phone specific error
 
     if (name === "SelectedInterestIds") {
       const interestId = parseInt(value);
@@ -127,214 +96,171 @@ export default function RegisterPage() {
     e.preventDefault();
     setPageError("");
     if (!libraryCardInput.trim()) {
-      setPageError("Please enter your Library Card number.");
+      setPageError("Please enter Library Card.");
       return;
-    } else if (!libraryCardInput.trim().startsWith("293600")) {
+    }
+    if (
+      libraryCardInput.trim().length !== 14 ||
+      !libraryCardInput.trim().startsWith("293600")
+    ) {
       setPageError(
-        "The numbered you entered is not a valid EPL card, please check with front desk"
+        "Please use a Valid EPL card number. If you need one go to the Reference Desk."
       );
       return;
     }
 
     setLoading(true);
     setSuccessMessage("");
-    setPolarisData(null);
-    setIsNocoDbUserByCard(false);
+    setExistingNocoDbUser(null);
 
     try {
-      // Step A: Check NocoDB
-      const existingNocoUser = await fetchUserByLibraryCard(
-        libraryCardInput.trim()
-      );
-      if (existingNocoUser) {
-        setIsNocoDbUserByCard(true);
-        setSuccessMessage("You are already registered for the Seed Library!");
+      const nocoUser = await fetchUserByLibraryCard(libraryCardInput.trim());
+      if (nocoUser) {
+        setExistingNocoDbUser(nocoUser);
         setStep(2);
-        setLoading(false);
-        return;
-      }
-
-      // Step B: Call Polaris (Mock)
-      const polarisPatron = await mockFetchPolarisUserData(
-        libraryCardInput.trim()
-      );
-      if (polarisPatron) {
-        setPolarisData(polarisPatron);
-        // Pre-fill form state
+      } else {
+        // Card is valid format, not in NocoDB - proceed to form
         setForm((prevForm) => ({
           ...prevForm,
-          FullName: polarisPatron.FullName || "",
           LibraryCard: libraryCardInput.trim(),
-          LibraryCardExpiration: polarisPatron.LibraryCardExpiration || "",
-          Phone: polarisPatron.Phone || "",
-          Email: polarisPatron.Email || "",
-          SignedAgreement: false, // Needs explicit agreement
+          FullName: "",
+          Phone: "",
+          Email: "",
           IsDonor: false,
+          SignedAgreement: false,
+          RegisteredAtBranchId: "",
+          Notes: "",
           SelectedInterestIds: [],
-          branches_id: "", // User needs to select this
         }));
-        // Check if card from Polaris is expired
-
-        if (polarisPatron.LibraryCardExpiration) {
-          const cardExpiryDate = new Date(polarisPatron.LibraryCardExpiration);
-          const today = new Date();
-          today.setHours(0, 0, 0, 0);
-          if (cardExpiryDate < today) {
-            setPageError(
-              "Your library card (according to library records) has expired. Please visit the reference desk to renew your card before registering for the Seed Library."
-            );
-            setPolarisData(null); // Don't proceed to form if card is expired
-            setStep(2); // Still go to step 2 to show the pageError
-            setLoading(false);
-            return;
-          }
-        }
-      } else {
-        setPageError(
-          "Invalid Library Card number or your details could not be found in the library system. Please check your card number or visit the reference desk."
-        );
+        setStep(2); // Move to form
       }
-      setStep(2);
     } catch (err) {
       console.error("Lookup failed:", err);
-      setPageError(
-        err.message || "An pageError occurred during lookup. Please try again."
-      );
-      setStep(2); // Show pageError on step 2
+      setPageError(err.message || "Error during card lookup.");
+      setStep(1); // Stay on step 1 on error
     } finally {
       setLoading(false);
     }
   };
 
-  // Handle Form Submission
   const handleRegistrationSubmit = async (e) => {
     e.preventDefault();
     setFormError("");
+    if (!form.FullName.trim()) {
+      setFormError("Full Name is required.");
+      return;
+    }
     if (!form.SignedAgreement) {
-      setFormError(
-        "You must agree to the terms and conditions to complete registration."
-      );
+      setFormError("Agreement to terms is required.");
       return;
     }
     if (!form.RegisteredAtBranchId) {
-      setFormError("Please select your preferred library branch.");
+      setFormError("Please select library branch.");
       return;
     }
 
-    if (!isValidPhoneNumberLength(form.Phone)) {
-      setFormError("Phone number must be 10 digits.");
-      setLoading(false); // Ensure loading is false if we return early
-      return;
+    let finalPhone = null;
+    if (form.Phone.trim()) {
+      // Only validate and format if phone is provided
+      if (!isValidPhoneNumberLength(form.Phone)) {
+        setFormError("If providing a Phone Number, it must be 10 digits.");
+        return;
+      }
+      finalPhone = formatPhoneNumber(form.Phone);
+      if (!finalPhone) {
+        setFormError("Invalid phone number format provided.");
+        return;
+      }
     }
-    const formattedPhone = formatPhoneNumber(form.Phone);
-    if (!formattedPhone) {
-      // Should not happen if isValidPhoneNumberLength passed, but as a safeguard
-      setPhoneError("Invalid phone number format.");
-      setLoading(false);
-      return;
-    }
-
-    // Add more client-side validation as needed
 
     setLoading(true);
     setSuccessMessage("");
 
     try {
-      const existingUserByPhone = await fetchUserByPhone(formattedPhone);
-      if (existingUserByPhone) {
-        if (existingUserByPhone.LibraryCard !== form.LibraryCard) {
-          setFormError(
-            `This phone number (${formattedPhone}) is already associated with another Seed Library account. Please use a different phone number or check your details.`
-          );
-          setLoading(false);
-          return;
-        }
-      }
       const branchId = parseInt(form.RegisteredAtBranchId);
       if (isNaN(branchId) || !branchId) {
-        setFormError("Invalid Branch selection, Please select a branch.");
+        setFormError("Invalid Branch selection.");
         setLoading(false);
         return;
       }
+
       const userData = {
         FullName: form.FullName,
-        LibraryCard: form.LibraryCard, // This was set from libraryCardInput
-        LibraryCardExpiration: form.LibraryCardExpiration,
-        Phone: formattedPhone,
-        Email: form.Email,
+        LibraryCard: form.LibraryCard,
+        Phone: finalPhone,
+        Email: form.Email.trim() || "",
         PreferredContact: form.PreferredContact,
         GardeningExperience: form.GardeningExperience,
         IsDonor: form.IsDonor,
         SignedAgreement: form.SignedAgreement,
-        Notes: form.Notes || `Registered at Branch id : ${branchId}`,
+        Status: "New",
+        Notes: form.Notes.trim() || "",
         branches_id: branchId,
       };
 
-      const newUser = await createUser(userData);
+      // Remove null phone from payload if not provided, NocoDB might prefer omitted field
+      if (!userData.Phone) delete userData.Phone;
+      if (!userData.Email) delete userData.Email;
+      if (!userData.Notes) delete userData.Notes;
 
-      if (newUser && newUser.Id) {
-        // createUser should return the new user object with Id
+      const newUserResponse = await createUser(userData);
+
+      if (newUserResponse && newUserResponse.Id) {
         if (form.SelectedInterestIds.length > 0) {
-          await linkUserInterests(newUser.Id, form.SelectedInterestIds);
+          await linkUserInterests(newUserResponse.Id, form.SelectedInterestIds);
         }
         setSuccessMessage(
-          `Welcome, ${newUser.FullName}! Registration complete. Redirecting to borrow page...`
+          `Welcome, ${userData.FullName}! Registration complete. Taking you to borrow seeds...`
         );
+
         setTimeout(() => {
           router.push(`/borrow?card=${encodeURIComponent(form.LibraryCard)}`);
-        }, 2000);
+        }, 3000);
       } else {
-        throw new Error(
-          "User creation failed or did not return expected data."
-        );
+        throw new Error("User creation failed or didn't return expected ID.");
       }
     } catch (err) {
       console.error("Registration submission failed:", err);
-      setFormError(err.message || "Registration failed. Please try again.");
+      setFormError("Registration failed. Please try again.");
     } finally {
       setLoading(false);
     }
   };
 
-  // Reset everything
   const resetFlow = () => {
     setStep(1);
     setLibraryCardInput("");
     setPageError("");
     setFormError("");
     setSuccessMessage("");
-    setPolarisData(null);
-    setIsNocoDbUserByCard(false);
-    // Reset form to initial state
+    setExistingNocoDbUser(null);
     setForm({
+      // Reset form to initial default values
       FullName: "",
       LibraryCard: "",
-      LibraryCardExpiration: "",
       Phone: "",
       Email: "",
       PreferredContact: "Phone",
-      GardeningExperience: "Not Specified",
+      GardeningExperience: "NotSpecified",
       IsDonor: false,
       SignedAgreement: false,
       RegisteredAtBranchId: "",
       Notes: "",
       SelectedInterestIds: [],
-      branches_id: 0,
+      Status: "New",
     });
   };
 
-  // --- UI Elements for Senior Audience ---
-  // Large fonts, clear labels, good contrast, simple inputs.
-
   return (
     <main className="min-h-screen bg-green-50 flex flex-col items-center justify-center px-4 py-12">
-      <div className="w-full max-w-2xl bg-white p-12 sm:p-6 rounded-xl shadow-2xl">
-        <div className="text-center mb-12">
+      <div className="w-full max-w-2xl bg-white p-6 md:p-10 lg:p-12 rounded-xl shadow-2xl">
+        <div className="text-center mb-8 md:mb-12">
           <Image
             src={seedLogo}
-            alt="Logo"
+            alt="Seed Library Logo"
             width={450}
-            className="rounded-full mx-auto mb-8"
+            height={450}
+            className="rounded-full mx-auto mb-4 md:mb-6"
             priority
           />
           <h1 className="text-3xl md:text-4xl font-bold text-black">
@@ -348,7 +274,7 @@ export default function RegisterPage() {
             <div>
               <label
                 htmlFor="libraryCardInput"
-                className="block text-xl font-medium text-gray-700 mb-1"
+                className="block text-lg md:text-xl font-medium text-gray-700 mb-1"
               >
                 Enter Your Library Card Number
               </label>
@@ -356,154 +282,190 @@ export default function RegisterPage() {
                 type="text"
                 id="libraryCardInput"
                 value={libraryCardInput}
-                onChange={(e) => setLibraryCardInput(e.target.value)}
-                className="w-full p-3 border border-gray-300 rounded-md shadow-sm focus:ring-green-500 focus:border-green-500 text-lg mb-6"
-                placeholder="Library Card Number"
+                onChange={(e) => {
+                  setLibraryCardInput(e.target.value);
+                  setPageError("");
+                }}
+                className="w-full p-3 md:p-4 text-lg md:text-xl border border-gray-300 rounded-md shadow-sm focus:ring-green-500 focus:border-green-500"
                 required
+                autoFocus
               />
             </div>
-            {pageError && <p className="text-red-600 text-md">{pageError}</p>}{" "}
-            {/* Error for this step */}
+            {pageError && (
+              <p className="text-red-600 text-md md:text-lg text-center">
+                {pageError}
+              </p>
+            )}
             <button
               type="submit"
               disabled={loading}
-              className="w-full flex justify-center py-3 px-4 border border-transparent rounded-xl shadow-sm text-xl font-semibold text-white bg-black hover:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-black disabled:opacity-50"
+              className="w-full py-3 md:py-4 text-lg md:text-xl font-semibold text-white bg-black rounded-xl shadow-md hover:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-black disabled:opacity-50"
             >
               {loading ? "Verifying..." : "Continue"}
             </button>
             <button
               type="button"
-              className="w-full mt-4 py-3 rounded-xl text-xl font-semibold text-green-dark border-2 border-green-medium hover:bg-green-50 focus:outline-none focus:ring-2 focus:ring-green-dark focus:ring-offset-2 transition text-center block"
               onClick={() => router.push("/")}
+              className="w-full mt-3 md:mt-4 py-3 md:py-4 text-lg md:text-xl font-semibold text-green-dark border-2 border-green-medium rounded-xl shadow-md hover:bg-green-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-dark transition"
             >
               Back to Home
             </button>
           </form>
         )}
 
-        {/* Step 2: Display results or simplified form */}
+        {/* Step 2: Display "Already Registered" Message OR Registration Form */}
         {step === 2 && (
           <div>
             {loading && (
-              <p className="text-center text-lg text-gray-600">
-                Loading details...
+              <p className="text-center text-lg md:text-xl text-gray-600">
+                Loading...
               </p>
             )}
 
-            {/* Error Display for Step 2 lookup/Polaris issues */}
-            {pageError &&
-              !loading && ( // Show general pageError if not specific to form submission
-                <div className="mb-6 p-4 bg-red-100 text-red-700 border border-red-300 rounded-lg">
-                  <p className="font-semibold text-xl">Verification Issue:</p>
-                  <p className="text-lg">{pageError}</p>
+            {/* Case 1: User Already Registered */}
+            {existingNocoDbUser && !loading && (
+              <div className="text-center space-y-4 md:space-y-6">
+                <svg
+                  className="mx-auto h-12 w-12 md:h-16 md:w-16 text-green-500"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth="2"
+                    d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"
+                  />
+                </svg>
+                <h2 className="text-xl md:text-2xl font-semibold text-green-dark">
+                  Welcome back, {existingNocoDbUser.FullName}!
+                </h2>
+                <p className="text-md md:text-lg text-gray-700">
+                  This Library Card (
+                  <span className="font-medium">
+                    {existingNocoDbUser.LibraryCard}
+                  </span>
+                  ) is already registered with the Seed Library.
+                </p>
+                <div className="flex flex-col sm:flex-row justify-center items-center gap-3 md:gap-4 pt-2">
+                  {/* Borrow Seeds Button - Primary Style */}
                   <button
-                    onClick={resetFlow}
-                    className="mt-4 w-full text-center py-2 px-4 border border-transparent rounded-md shadow-sm text-lg font-medium text-white bg-black hover:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-black"
+                    onClick={() =>
+                      router.push(
+                        `/borrow?card=${encodeURIComponent(
+                          existingNocoDbUser.LibraryCard
+                        )}`
+                      )
+                    }
+                    className="w-full sm:w-auto py-3 px-6 text-md md:text-lg font-semibold text-white bg-black rounded-xl shadow-md hover:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-black"
                   >
-                    Try a different card
+                    Borrow Seeds
+                  </button>
+                  {/* Donate Seeds Button - Secondary Style */}
+                  <button
+                    onClick={() => router.push("/donate")} // Assuming /donate is the route
+                    className="w-full sm:w-auto py-3 px-6 text-md md:text-lg font-semibold text-green-dark border-2 border-green-medium rounded-xl shadow-md hover:bg-green-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-dark transition"
+                    disabled
+                  >
+                    Donate Seeds
                   </button>
                 </div>
-              )}
-
-            {/* Success Message (Already Registered or Registration Complete) */}
-            {successMessage && !loading && (
-              <div className="mb-6 p-4 bg-green-100 text-green-700 border border-green-300 rounded-lg text-center">
-                <p className="font-semibold text-xl">Notice</p>
-                <p className="text-lg mt-2">{successMessage}</p>
-                {!isNocoDbUserByCard /* Show Start Over only if it wasn't "already registered" */ && (
-                  <button
-                    onClick={resetFlow}
-                    className="mt-3 py-2 px-5 text-md md:text-lg font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
-                  >
-                    Start Over
-                  </button>
-                )}
+                {/* Register Another Card - Link Style or Subtle Button */}
+                <button
+                  onClick={resetFlow}
+                  className="w-full sm:w-auto text-lg md:text-lg text-blue-600 hover:text-blue-800 underline pt-4 font-medium"
+                >
+                  Register another card
+                </button>
               </div>
             )}
 
-            {/* Simplified Registration Form (if not NocoDB user, Polaris data exists, and no major pageError/success) */}
-            {!isNocoDbUserByCard &&
-              polarisData &&
-              !successMessage &&
+            {/* ... (Case 2: Page Error during initial card lookup - JSX unchanged from previous version) ... */}
+            {pageError && !existingNocoDbUser && !loading && (
+              <div className="mb-6 p-4 bg-red-100 text-red-700 border border-red-300 rounded-lg">
+                <p className="font-semibold text-lg md:text-xl">
+                  An Error Occurred:
+                </p>
+                <p className="text-md md:text-lg">{pageError}</p>
+                <button
+                  onClick={resetFlow}
+                  className="mt-4 w-full text-center py-2 px-4 text-md md:text-lg font-medium text-white bg-black rounded-md hover:bg-gray-700"
+                >
+                  Try again
+                </button>
+              </div>
+            )}
+
+            {/* Case 3: New User Registration Form - Ensure buttons here also match */}
+            {!existingNocoDbUser &&
               !pageError &&
-              !loading && (
-                <form onSubmit={handleRegistrationSubmit} className="space-y-6">
-                  <p className="text-lg text-gray-700 mb-4">
-                    Welcome,{" "}
-                    <span className="font-semibold">
-                      {form.FullName || "Valued Patron"}
-                    </span>
-                    ! Some of your information has been pre-filled. Please
-                    complete the remaining details to join the Seed Library.
+              !loading &&
+              !successMessage && (
+                <form
+                  onSubmit={handleRegistrationSubmit}
+                  className="space-y-5 md:space-y-6"
+                >
+                  <p className="text-lg md:text-xl text-gray-800 font-semibold border-b pb-2">
+                    New Seed Library Member Registration
+                  </p>
+                  <p className="text-sm md:text-base text-gray-600">
+                    Library Card:{" "}
+                    <span className="font-medium">{form.LibraryCard}</span>{" "}
+                    (Valid for registration)
                   </p>
 
-                  {/* ----- Fields to confirm/fill ----- */}
-                  {/* Name (pre-filled, read-only or confirmable) */}
-                  <fieldset className="space-y-4 p-4 border border-gray-200 rounded-md">
-                    <legend className="text-xl font-semibold text-green-dark px-2">
-                      Your Information (from Library Records)
-                    </legend>
-                    <div>
-                      <label className="block text-sm font-medium text-gray-500">
-                        Full Name
-                      </label>
-                      <p className="text-lg p-3 bg-gray-100 border border-gray-200 rounded-md">
-                        {form.FullName}
-                      </p>
-                    </div>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      <div>
-                        <label className="block text-sm font-medium text-gray-500">
-                          Library Card
-                        </label>
-                        <p className="text-lg p-3 bg-gray-100 border border-gray-200 rounded-md">
-                          {form.LibraryCard}
-                        </p>
-                      </div>
-                      <div>
-                        <label className="block text-sm font-medium text-gray-500">
-                          Card Expiration
-                        </label>
-                        <p className="text-lg p-3 bg-gray-100 border border-gray-200 rounded-md">
-                          {form.LibraryCardExpiration
-                            ? new Date(
-                                form.LibraryCardExpiration
-                              ).toLocaleDateString()
-                            : "N/A"}
-                        </p>
-                      </div>
-                    </div>
-                    {/* Phone and Email might be editable if Polaris data is just a suggestion */}
+                  {/* Full Name (Required) */}
+                  <div>
+                    <label
+                      htmlFor="FullName"
+                      className="block text-md md:text-lg font-medium text-gray-700 mb-1"
+                    >
+                      Full Name <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      name="FullName"
+                      id="FullName"
+                      required
+                      value={form.FullName}
+                      onChange={handleFormChange}
+                      className="w-full p-3 md:p-4 text-md md:text-lg border rounded-md focus:ring-green-500 focus:border-green-500"
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 md:gap-6">
+                    {/* Phone (Optional) */}
                     <div>
                       <label
                         htmlFor="Phone"
                         className="block text-md md:text-lg font-medium text-gray-700 mb-1"
                       >
-                        Phone (Confirm/Update){" "}
-                        <span className="text-red-500">*</span>
+                        Phone Number{" "}
+                        <span className="text-xs text-gray-500">
+                          (Optional)
+                        </span>
                       </label>
                       <input
                         type="tel"
                         name="Phone"
                         id="Phone"
-                        required
                         value={form.Phone}
                         onChange={handleFormChange}
                         className="w-full p-3 md:p-4 text-md md:text-lg border rounded-md focus:ring-green-500 focus:border-green-500"
                         placeholder="e.g., 5551234567"
                       />
-                      {formError.includes(
-                        "Phone"
-                      ) /* More specific error check */ && (
-                        <p className="text-red-500 text-sm mt-1">{formError}</p>
-                      )}
                     </div>
+                    {/* Email (Optional) */}
                     <div>
                       <label
                         htmlFor="Email"
-                        className="block text-lg font-medium text-gray-700 mb-1"
+                        className="block text-md md:text-lg font-medium text-gray-700 mb-1"
                       >
-                        Email Address (Confirm or Update)
+                        Email Address{" "}
+                        <span className="text-xs text-gray-500">
+                          (Optional)
+                        </span>
                       </label>
                       <input
                         type="email"
@@ -511,140 +473,162 @@ export default function RegisterPage() {
                         id="Email"
                         value={form.Email}
                         onChange={handleFormChange}
-                        className="w-full p-3 border border-gray-300 rounded-md shadow-sm focus:ring-green-500 focus:border-green-500 text-lg"
+                        className="w-full p-3 md:p-4 text-md md:text-lg border rounded-md focus:ring-green-500 focus:border-green-500"
                       />
                     </div>
-                  </fieldset>
+                  </div>
 
-                  {/* Fields user MUST fill: PreferredContact, GardeningExperience, RegisteredAtBranchId, Agreements, Interests (optional) */}
-                  <fieldset className="space-y-4 p-4 border border-gray-200 rounded-md">
-                    <legend className="text-xl font-semibold text-green-dark px-2">
-                      Seed Library Profile
-                    </legend>
-                    {/* Preferred Contact */}
-                    <div>
-                      <label
-                        htmlFor="PreferredContact"
-                        className="block text-lg font-medium text-gray-700 mb-1"
-                      >
-                        Preferred Contact Method{" "}
-                        <span className="text-red-500">*</span>
-                      </label>
-                      <select
-                        name="PreferredContact"
-                        id="PreferredContact"
-                        required
-                        value={form.PreferredContact}
-                        onChange={handleFormChange}
-                        className="w-full p-3 border border-gray-300 rounded-md shadow-sm focus:ring-green-500 focus:border-green-500 text-lg bg-white"
-                      >
-                        <option value="Phone">Phone</option>
-                        <option value="Email">Email</option>
-                        <option value="None">None</option>
-                      </select>
-                    </div>
-                    {/* Gardening Experience */}
-                    <div>
-                      <label
-                        htmlFor="GardeningExperience"
-                        className="block text-lg font-medium text-gray-700 mb-1"
-                      >
-                        Gardening Experience{" "}
-                        <span className="text-red-500">*</span>
-                      </label>
-                      <select
-                        name="GardeningExperience"
-                        id="GardeningExperience"
-                        value={form.GardeningExperience}
-                        onChange={handleFormChange}
-                        className="w-full p-3 border border-gray-300 rounded-md shadow-sm focus:ring-green-500 focus:border-green-500 text-lg bg-white"
-                      >
-                        <option value="Not Specified">Not Specified</option>
-                        <option value="Beginner">Beginner</option>
-                        <option value="Intermediate">Intermediate</option>
-                        <option value="Advanced">Advanced</option>
-                      </select>
-                    </div>
-                    {/* Branch Selection */}
-                    <div>
-                      <label
-                        htmlFor="RegisteredAtBranchId"
-                        className="block text-lg font-medium text-gray-700 mb-1"
-                      >
-                        Select Your Library Branch{" "}
-                        <span className="text-red-500">*</span>
-                      </label>
-                      <select
-                        name="RegisteredAtBranchId"
-                        id="RegisteredAtBranchId"
-                        required
-                        value={form.RegisteredAtBranchId}
-                        onChange={handleFormChange}
-                        className="w-full p-3 border border-gray-300 rounded-md shadow-sm focus:ring-green-500 focus:border-green-500 text-lg bg-white"
-                        disabled={branches.length === 0}
-                      >
-                        <option value="">
-                          {branches.length === 0
-                            ? "Loading branches..."
-                            : "Select a branch"}
+                  {/* Preferred Contact (Required) */}
+                  <div>
+                    <label
+                      htmlFor="PreferredContact"
+                      className="block text-md md:text-lg font-medium text-gray-700 mb-1"
+                    >
+                      Preferred Contact
+                    </label>
+                    <select
+                      name="PreferredContact"
+                      id="PreferredContact"
+                      required
+                      value={form.PreferredContact}
+                      onChange={handleFormChange}
+                      className="w-full p-3 md:p-4 text-md md:text-lg border rounded-md bg-white focus:ring-green-500 focus:border-green-500"
+                    >
+                      <option value="Phone">Phone</option>{" "}
+                      <option value="Email">Email</option>{" "}
+                      <option value="None">None</option>
+                    </select>
+                  </div>
+
+                  {/* Gardening Experience (Required, default "Not Specified") */}
+                  <div>
+                    <label
+                      htmlFor="GardeningExperience"
+                      className="block text-md md:text-lg font-medium text-gray-700 mb-1"
+                    >
+                      Gardening Experience{" "}
+                    </label>
+                    <select
+                      name="GardeningExperience"
+                      id="GardeningExperience"
+                      required
+                      value={form.GardeningExperience}
+                      onChange={handleFormChange}
+                      className="w-full p-3 md:p-4 text-md md:text-lg border rounded-md bg-white focus:ring-green-500 focus:border-green-500"
+                    >
+                      <option value="Not Specified">Not Specified</option>{" "}
+                      <option value="Beginner">Beginner</option>{" "}
+                      <option value="Intermediate">Intermediate</option>{" "}
+                      <option value="Advanced">Advanced</option>
+                    </select>
+                  </div>
+
+                  {/* Branch Selection (Required) */}
+                  <div>
+                    <label
+                      htmlFor="RegisteredAtBranchId"
+                      className="block text-md md:text-lg font-medium text-gray-700 mb-1"
+                    >
+                      Register at Branch <span className="text-red-500">*</span>
+                    </label>
+                    <select
+                      name="RegisteredAtBranchId"
+                      id="RegisteredAtBranchId"
+                      required
+                      value={form.RegisteredAtBranchId}
+                      onChange={handleFormChange}
+                      className="w-full p-3 md:p-4 text-md md:text-lg border rounded-md bg-white focus:ring-green-500 focus:border-green-500"
+                      disabled={branches.length === 0}
+                    >
+                      <option value="">
+                        {branches.length === 0
+                          ? "Loading branches..."
+                          : "Select a branch"}
+                      </option>
+                      {branches.map((branch) => (
+                        <option key={branch.Id} value={branch.Id}>
+                          {branch.BranchName}
                         </option>
-                        {branches.map((branch) => (
-                          <option key={branch.Id} value={branch.Id}>
-                            {branch.BranchName}
-                          </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {/* Interests (Optional) */}
+                  {interests.length > 0 && (
+                    <div>
+                      <label className="block text-md md:text-lg font-medium text-gray-700 mb-2">
+                        Gardening Interests{" "}
+                        <span className="text-xs text-gray-500">
+                          (Optional)
+                        </span>
+                      </label>
+                      <div className="space-y-2 max-h-40 md:max-h-48 overflow-y-auto p-2 border rounded-md">
+                        {interests.map((interest) => (
+                          <label
+                            key={interest.Id}
+                            className="flex items-center space-x-3 p-1 md:p-2 hover:bg-gray-50 rounded-md"
+                          >
+                            <input
+                              type="checkbox"
+                              name="SelectedInterestIds"
+                              value={interest.Id}
+                              checked={form.SelectedInterestIds.includes(
+                                interest.Id
+                              )}
+                              onChange={handleFormChange}
+                              className="form-checkbox h-4 w-4 md:h-5 md:w-5 text-green-600 rounded"
+                            />
+                            <span className="text-gray-700 text-sm md:text-lg">
+                              {interest.Title}
+                            </span>
+                          </label>
                         ))}
-                      </select>
-                    </div>
-                    {/* Interests */}
-                    {interests.length > 0 && (
-                      <div>
-                        <label className="block text-lg font-medium text-gray-700 mb-2">
-                          Gardening Interests (Optional)
-                        </label>
-                        <div className="space-y-2 max-h-48 overflow-y-auto p-2 border border-gray-200 rounded-md">
-                          {interests.map((interest) => (
-                            <label
-                              key={interest.Id}
-                              className="flex items-center space-x-3 p-2 hover:bg-gray-50 rounded-md"
-                            >
-                              <input
-                                type="checkbox"
-                                name="SelectedInterestIds"
-                                value={interest.Id}
-                                checked={form.SelectedInterestIds.includes(
-                                  interest.Id
-                                )}
-                                onChange={handleFormChange}
-                                className="form-checkbox h-5 w-5 text-green-600 rounded border-gray-300 focus:ring-green-500"
-                              />
-                              <span className="text-gray-700 text-lg">
-                                {interest.Title}
-                              </span>
-                            </label>
-                          ))}
-                        </div>
                       </div>
-                    )}
-                  </fieldset>
-                  {/* Agreement Section - same as before */}
-                  <fieldset className="space-y-4 p-4 border border-gray-200 rounded-md">
-                    <legend className="text-xl font-semibold text-green-dark px-2">
-                      Agreement
+                    </div>
+                  )}
+
+                  {/* Notes (Optional) */}
+                  <div>
+                    <label
+                      htmlFor="Notes"
+                      className="block text-md md:text-lg font-medium text-gray-700 mb-1"
+                    >
+                      Notes{" "}
+                      <span className="text-xs text-gray-500">(Optional)</span>
+                    </label>
+                    <textarea
+                      name="Notes"
+                      id="Notes"
+                      rows="2"
+                      value={form.Notes}
+                      onChange={handleFormChange}
+                      className="w-full p-3 md:p-4 text-md md:text-lg border rounded-md focus:ring-green-500 focus:border-green-500"
+                    ></textarea>
+                  </div>
+                  <fieldset className="space-y-3 md:space-y-4 p-3 md:p-4 border border-gray-300 rounded-md bg-gray-50">
+                    <legend className="text-lg md:text-xl font-semibold text-green-dark px-2 -mb-2">
+                      Terms & Conditions
                     </legend>
-                    <div className="flex items-start">
+                    <ul className="list-decimal list-inside space-y-2 text-sm md:text-base text-gray-700 px-2 py-1">
+                      {AGREEMENT_CONDITIONS.map((condition, index) => (
+                        <li key={index}>{condition}</li>
+                      ))}
+                    </ul>
+                    <div className="flex items-start pt-2">
                       <input
                         id="IsDonor"
                         name="IsDonor"
                         type="checkbox"
                         checked={form.IsDonor}
                         onChange={handleFormChange}
-                        className="focus:ring-green-500 h-5 w-5 text-green-600 border-gray-300 rounded"
+                        className="mt-1 focus:ring-green-500 h-5 w-5 text-green-600 border-gray-300 rounded"
                       />
                       <label
                         htmlFor="IsDonor"
-                        className="ml-3 text-lg font-medium text-gray-700"
+                        className="ml-3 text-md md:text-lg font-medium text-gray-700"
                       >
                         I'm interested in donating seeds in the future.
+                        (Optional)
                       </label>
                     </div>
                     <div className="flex items-start">
@@ -655,30 +639,29 @@ export default function RegisterPage() {
                         required
                         checked={form.SignedAgreement}
                         onChange={handleFormChange}
-                        className="focus:ring-green-500 h-5 w-5 text-green-600 border-gray-300 rounded"
+                        className="mt-1 focus:ring-green-500 h-5 w-5 text-green-600 border-gray-300 rounded"
                       />
                       <label
                         htmlFor="SignedAgreement"
-                        className="ml-3 text-lg font-medium text-gray-700"
+                        className="ml-3 text-md md:text-lg font-medium text-gray-700"
                       >
-                        I agree to the Seed Library terms and conditions.{" "}
+                        I have read and agree to all the Seed Library terms and
+                        conditions listed above.{" "}
                         <span className="text-red-500">*</span>
                       </label>
                     </div>
                   </fieldset>
 
-                  {/* Error for form submission */}
-                  {formError &&
-                    !formError.includes("Phone") /* General form error */ && (
-                      <p className="text-red-600 text-md md:text-lg text-center">
-                        {formError}
-                      </p>
-                    )}
+                  {formError && (
+                    <p className="text-red-600 text-md md:text-lg text-center">
+                      {formError}
+                    </p>
+                  )}
 
                   <button
                     type="submit"
                     disabled={loading || !form.SignedAgreement}
-                    className="w-full flex justify-center py-3 px-4 border border-transparent rounded-xl shadow-sm text-xl font-semibold text-white bg-black hover:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-black disabled:opacity-50"
+                    className="w-full py-3 md:py-4 text-lg md:text-xl font-semibold text-white bg-black rounded-xl shadow-md hover:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-black disabled:opacity-50"
                   >
                     {loading
                       ? "Completing Registration..."
@@ -687,32 +670,29 @@ export default function RegisterPage() {
                   <button
                     type="button"
                     onClick={resetFlow}
-                    className="mt-4 w-full text-center py-2 px-4 border border-gray-300 rounded-md shadow-sm text-lg font-bold text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
+                    className="w-full mt-3 py-3 md:py-4 text-lg md:text-xl font-semibold text-green-dark border-2 border-green-medium rounded-xl shadow-md hover:bg-green-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-dark transition"
                   >
                     Cancel / Start Over
                   </button>
                 </form>
               )}
 
-            {/* Fallback if no specific state matches but step is 2 (should be covered by above) */}
-            {step === 2 &&
-              !loading &&
-              !pageError &&
-              !successMessage &&
-              !polarisData &&
-              !isNocoDbUserByCard && (
-                <div className="text-center">
-                  <p className="text-lg text-gray-600">
-                    Please enter your library card number to begin.
-                  </p>
-                  <button
-                    onClick={resetFlow}
-                    className="mt-4 w-auto mx-auto py-2 px-6 border border-transparent rounded-md shadow-sm text-lg font-medium text-white bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500"
-                  >
-                    Enter Library Card
-                  </button>
-                </div>
-              )}
+            {/* Success Message AFTER new registration */}
+            {successMessage && !existingNocoDbUser && !loading && (
+              <div className="mb-6 p-4 bg-green-100 text-green-700 border border-green-300 rounded-lg text-center">
+                <p className="font-semibold text-lg md:text-xl">
+                  Registration Complete!
+                </p>
+                <p className="text-md md:text-lg mt-2">{successMessage}</p>
+                <button
+                  onClick={resetFlow}
+                  className="mt-3 py-2 px-5 text-md md:text-lg font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
+                >
+                  Register Another Person
+                </button>
+              </div>
+            )}
+            {/* ... (Fallback if no state matches - JSX unchanged) ... */}
           </div>
         )}
       </div>
