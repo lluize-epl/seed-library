@@ -442,7 +442,7 @@ export default function BorrowPage() {
                 Library Card Number
               </label>
               <input
-                type="text"
+                type="number"
                 id="libraryCardInput"
                 value={libraryCardInput}
                 onChange={(e) => {
@@ -452,6 +452,7 @@ export default function BorrowPage() {
                 className="w-full p-3 text-md md:text-lg border border-gray-300 rounded-md shadow-sm focus:ring-green-500 focus:border-green-500"
                 placeholder="Enter 14-digit card number"
                 required
+                autoFocus
               />
             </div>
 

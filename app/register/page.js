@@ -279,7 +279,7 @@ export default function RegisterPage() {
                 Enter Your Library Card Number
               </label>
               <input
-                type="text"
+                type="number"
                 id="libraryCardInput"
                 value={libraryCardInput}
                 onChange={(e) => {
