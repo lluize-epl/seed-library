@@ -4,7 +4,7 @@ import { useState, useEffect } from "react";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import Image from "next/image";
 // import edisonLogo from "@/public/edison-logo.png";
-import seedLogo from "@/public/seedLogo.jpeg";
+import seedLogo from "@/public/eplLogoOnly.png";
 // API Functions from your lib/noco-apis/ structure
 import { fetchUserByLibraryCard } from "@/lib/noco-apis/users";
 import { batchUpdateSeedInventory } from "@/lib/noco-apis/seedInventory";
@@ -389,8 +389,8 @@ export default function BorrowPage() {
           <Image
             src={seedLogo}
             alt="Edison Public Library Logo"
-            width={500}
-            height={500}
+            width={250}
+            height={250}
             md-width={120}
             md-height={120}
             className="rounded-full mx-auto"

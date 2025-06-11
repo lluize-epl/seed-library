@@ -2,7 +2,7 @@
 
 import Image from "next/image";
 // import edisonLogo from "../public/edison-logo.png"; // Place your logo in /public
-import seedLogo from "../public/seedLogo.jpeg"; // Place your logo in /public
+import seedLogo from "../public/eplLogo.png"; // Place your logo in /public
 import Link from "next/link";
 
 export default function Home() {
@@ -12,8 +12,8 @@ export default function Home() {
         <Image
           src={seedLogo}
           alt="Edison Public Library Logo"
-          width={500}
-          height={500}
+          width={300}
+          height={250}
           priority
           className="rounded-full"
         />

@@ -5,19 +5,23 @@ import { usePathname } from "next/navigation";
 import {
   UsersIcon,
   CircleStackIcon, // For Inventory (like database stack) or BeakerIcon (seeds)
+  BeakerIcon,
   BuildingLibraryIcon, // For Branches
   Cog6ToothIcon,
-  ChartBarIcon, // For generic stats or overview
   HomeIcon, // Link back to main app landing page
 } from "@heroicons/react/24/outline"; // Or /24/solid for filled icons
-
-// Placeholder for your logo if you have one for the admin section
-// import AdminLogo from '@/public/admin-logo.png';
-// import Image from 'next/image';
+import eplLogo from "../../public/eplLogoOnly.png";
+import Image from "next/image";
+import { RiSeedlingLine } from "react-icons/ri";
 
 const navigationItems = [
-  { name: "User Stats", href: "/admin", icon: UsersIcon, current: true }, // Default page
-  { name: "Seed Stats", href: "/admin/seed-stats", icon: CircleStackIcon }, // Or use a more specific seed icon
+  {
+    name: "User Stats",
+    href: "/admin/user-stats",
+    icon: UsersIcon,
+    current: true,
+  }, // Default page
+  { name: "Seed Stats", href: "/admin/seed-stats", icon: RiSeedlingLine }, // Or use a more specific seed icon
   { name: "Inventory", href: "/admin/inventory", icon: CircleStackIcon },
   {
     name: "Branch Stats",
@@ -42,14 +46,15 @@ export default function AdminLayout({ children }) {
     <div className="min-h-screen flex bg-gray-100 font-geist-sans">
       {/* Sidebar */}
       <div className="w-20 flex-shrink-0 bg-slate-800 text-slate-300 flex flex-col items-center py-6 space-y-6">
-        {/* Optional Logo */}
-        <div className="mb-4">
-          {/* <Image src={AdminLogo} alt="Admin" width={40} height={40} /> */}
-          <ChartBarIcon
-            className="h-10 w-10 text-green-400"
-            aria-hidden="true"
+        <Link href="/admin">
+          <Image
+            src={eplLogo}
+            alt="logo"
+            width={50}
+            height={50}
+            className="rounded"
           />
-        </div>
+        </Link>
 
         {/* Main Navigation */}
         <nav className="flex-grow flex flex-col items-center space-y-4">

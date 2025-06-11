@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import Image from "next/image";
-import seedLogo from "@/public/seedLogo.jpeg"; // Your logo
+import seedLogo from "@/public/eplLogoOnly.png"; // Your logo
 import { isValidPhoneNumberLength, formatPhoneNumber } from "@/lib/utils"; // Removed isDateExpired
 
 // Import API functions
@@ -262,8 +262,8 @@ export default function RegisterPage() {
           <Image
             src={seedLogo}
             alt="Seed Library Logo"
-            width={450}
-            height={450}
+            width={250}
+            height={200}
             className="rounded-full mx-auto mb-4 md:mb-6"
             priority
           />
