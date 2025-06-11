@@ -1,6 +1,6 @@
 // /app/borrow/page.js
 "use client";
-import { useState, useEffect, use } from "react";
+import { useState, useEffect } from "react";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import Image from "next/image";
 // import edisonLogo from "@/public/edison-logo.png";
@@ -139,7 +139,7 @@ export default function BorrowPage() {
     async function loadBranches() {
       setLoading(true);
       try {
-        const branchesData = await fetchAllBranches(); // This now calls the proxied version
+        const branchesData = await fetchAllBranches();
         setBranches(branchesData || []);
       } catch (err) {
         console.error("Failed to fetch branches:", err);
@@ -540,19 +540,13 @@ export default function BorrowPage() {
                             scope="col"
                             className="px-3 py-2 text-left font-medium text-gray-500 tracking-wider"
                           >
-                            Seed Name
+                            Seed Type
                           </th>
                           <th
                             scope="col"
                             className="px-3 py-2 text-left font-medium text-gray-500 tracking-wider"
                           >
-                            Type
-                          </th>
-                          <th
-                            scope="col"
-                            className="px-3 py-2 text-left font-medium text-gray-500 tracking-wider"
-                          >
-                            Qty
+                            Qty.
                           </th>
                           <th
                             scope="col"
@@ -571,9 +565,6 @@ export default function BorrowPage() {
                             <tr key={`${tx.seedId}-${tx.date}-${index}`}>
                               <td className="px-3 py-2 whitespace-nowrap">
                                 {formatDate(tx.date)}
-                              </td>
-                              <td className="px-3 py-2 whitespace-nowrap">
-                                {tx.seedName}
                               </td>
                               <td className="px-3 py-2 whitespace-nowrap">
                                 {tx.seedType}

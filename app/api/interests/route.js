@@ -2,7 +2,7 @@
 import { NextResponse } from "next/server";
 import { serverNocoFetch } from "@/lib/server/nocoService"; // Your centralized server-side fetcher
 
-const INTERESTS_TABLE_ID = process.env.NEXT_PUBLIC_NOCO_INTERESTS_TABLE_ID; // Or move to server-only
+const INTERESTS_TABLE_ID = process.env.NOCO_INTERESTS_TABLE_ID; // Or move to server-only
 
 export async function GET(request) {
   if (!INTERESTS_TABLE_ID) {

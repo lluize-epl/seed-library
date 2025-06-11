@@ -8,7 +8,7 @@ import {
   UserPlusIcon,
   CheckBadgeIcon,
   ClockIcon,
-} from "@heroicons/react"; // Example icons
+} from "@heroicons/react/24/outline"; // Example icons
 
 // Placeholder for API call to fetch user stats
 async function fetchUserStatsData() {
@@ -18,9 +18,9 @@ async function fetchUserStatsData() {
   return new Promise((resolve) => {
     setTimeout(() => {
       resolve({
-        totalUsers: 1250,
-        newThisMonth: 78,
-        validatedUsers: 950,
+        totalUsers: 21000,
+        newThisMonth: 573,
+        validatedUsers: 1728,
         newStatusUsers: 300,
         // You could add change percentages if you track historical data
         // totalUsersChange: "+5%",
