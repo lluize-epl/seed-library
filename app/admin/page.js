@@ -8,7 +8,7 @@ import {
   UserPlusIcon,
   CheckBadgeIcon,
   ClockIcon,
-} from "@heroicons/react/24/outline"; // Example icons
+} from "@heroicons/react"; // Example icons
 
 // Placeholder for API call to fetch user stats
 async function fetchUserStatsData() {
