@@ -9,7 +9,6 @@ import { isValidPhoneNumberLength, formatPhoneNumber } from "@/lib/utils"; // Re
 // Import API functions
 import {
   createUser,
-  linkUserInterests,
   fetchUserByLibraryCard,
   // fetchUserByPhone, // No longer checking phone for uniqueness on register
 } from "@/lib/noco-apis/users";
@@ -175,6 +174,7 @@ export default function RegisterPage() {
 
     setLoading(true);
     setSuccessMessage("");
+    setFormError("");
 
     try {
       const branchId = parseInt(form.RegisteredAtBranchId);
@@ -203,25 +203,29 @@ export default function RegisterPage() {
       if (!userData.Email) delete userData.Email;
       if (!userData.Notes) delete userData.Notes;
 
-      const newUserResponse = await createUser(userData);
+      const newUserResponse = await createUser(
+        userData,
+        form.SelectedInterestIds
+      );
 
       if (newUserResponse && newUserResponse.Id) {
-        if (form.SelectedInterestIds.length > 0) {
-          await linkUserInterests(newUserResponse.Id, form.SelectedInterestIds);
-        }
         setSuccessMessage(
           `Welcome, ${userData.FullName}! Registration complete. Taking you to borrow seeds...`
         );
-
+        const cardForRedirect = newUserResponse.LibraryCard || form.LibraryCard;
         setTimeout(() => {
-          router.push(`/borrow?card=${encodeURIComponent(form.LibraryCard)}`);
+          router.push(`/borrow?card=${encodeURIComponent(cardForRedirect)}`);
         }, 3000);
       } else {
-        throw new Error("User creation failed or didn't return expected ID.");
+        console.error(
+          "Registration API call seemed to succeed but returned invalid user data:",
+          newUserResponse
+        );
+        throw new Error("User registration process incomplete on server.");
       }
     } catch (err) {
       console.error("Registration submission failed:", err);
-      setFormError("Registration failed. Please try again.");
+      setFormError(err.message || "Registration failed. Please try again.");
     } finally {
       setLoading(false);
     }
@@ -241,7 +245,7 @@ export default function RegisterPage() {
       Phone: "",
       Email: "",
       PreferredContact: "Phone",
-      GardeningExperience: "NotSpecified",
+      GardeningExperience: "Not Specified",
       IsDonor: false,
       SignedAgreement: false,
       RegisteredAtBranchId: "",

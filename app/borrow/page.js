@@ -7,12 +7,9 @@ import Image from "next/image";
 import seedLogo from "@/public/seedLogo.jpeg";
 // API Functions from your lib/noco-apis/ structure
 import { fetchUserByLibraryCard } from "@/lib/noco-apis/users";
-import {
-  fetchAvailableSeedsAtInventory,
-  batchUpdateSeedInventory,
-} from "@/lib/noco-apis/seedInventory";
+import { batchUpdateSeedInventory } from "@/lib/noco-apis/seedInventory";
 import { fetchAllBranches } from "@/lib/noco-apis/branches";
-import { fetchSeedDetailsByIds } from "@/lib/noco-apis/seeds";
+import { fetchDetailedAvailableSeedsForBranch } from "@/lib/noco-apis/seeds";
 import { createPendingPickupRequest } from "@/lib/noco-apis/pendingPickups";
 
 // Utils from lib/utils.js
@@ -21,6 +18,7 @@ import {
   processUserBorrowedData,
   countRecentBorrows,
   getActivelyHeldSeedIds,
+  calculateDaysUntilNextBorrow,
 } from "@/lib/utils";
 
 export default function BorrowPage() {
@@ -36,6 +34,7 @@ export default function BorrowPage() {
     useState([]);
   const [activelyHeldSeedIds, setActivelyHeldSeedIds] = useState([]);
   const [recentBorrowsTotalPackets, setRecentBorrowsTotalPackets] = useState(0);
+  const [daysLeftToBorrow, setDaysLeftToBorrow] = useState(null);
 
   const [branches, setBranches] = useState([]);
   const [selectedBranchId, setSelectedBranchId] = useState("");
@@ -75,6 +74,7 @@ export default function BorrowPage() {
     setSeedsAvailableForSelection([]);
     setSelectedSeedsAndQuantities([]);
     setHasActiveHold(false);
+    setDaysLeftToBorrow(null);
 
     try {
       const foundUser = await fetchUserByLibraryCard(cardToLookup.trim());
@@ -111,10 +111,18 @@ export default function BorrowPage() {
         foundUser.TransactionDates || [],
         foundUser.TransactionStatuses || [] // Assuming you might add this
       );
+
       setAllUserProcessedTransactions(processedTxs);
       setActivelyHeldSeedIds(getActivelyHeldSeedIds(processedTxs));
-      setRecentBorrowsTotalPackets(countRecentBorrows(processedTxs));
-
+      const recentCount = countRecentBorrows(processedTxs);
+      setRecentBorrowsTotalPackets(recentCount);
+      if (recentCount >= 3) {
+        const daysLeft = calculateDaysUntilNextBorrow(processedTxs, 3, 30);
+        setDaysLeftToBorrow(daysLeft);
+        // We can still proceed to step 2 to show user info and the "limit reached" message
+      } else {
+        setDaysLeftToBorrow(null); // Can borrow
+      }
       setStep(2); // Move to branch selection
     } catch (err) {
       console.error("Lookup failed (performCardLookup):", err);
@@ -129,9 +137,9 @@ export default function BorrowPage() {
   // Fetch all branches for the dropdown on component mount
   useEffect(() => {
     async function loadBranches() {
-      setLoading(true); // For initial branch load indication
+      setLoading(true);
       try {
-        const branchesData = await fetchAllBranches();
+        const branchesData = await fetchAllBranches(); // This now calls the proxied version
         setBranches(branchesData || []);
       } catch (err) {
         console.error("Failed to fetch branches:", err);
@@ -144,7 +152,7 @@ export default function BorrowPage() {
     }
     loadBranches();
   }, []);
-
+  // Library Card search param
   useEffect(() => {
     const cardFromQuery = searchParams.get("card");
     if (cardFromQuery && !user && !loading && step === 1) {
@@ -157,68 +165,39 @@ export default function BorrowPage() {
   useEffect(() => {
     if (selectedBranchId && user) {
       async function loadSeedsForBranch() {
-        setLoading(true); // For seed loading indication
+        setLoading(true);
         setFormError("");
-        setSeedsAvailableForSelection([]);
+        setSeedsAvailableForSelection([]); // Clear previous
         try {
-          const inventoryRecords = await fetchAvailableSeedsAtInventory(
-            selectedBranchId
+          // Single API call to your new proxied endpoint
+          const detailedSeedsAvailable =
+            await fetchDetailedAvailableSeedsForBranch(selectedBranchId);
+
+          // The API route already combined inventory with seed details.
+          // Now, just filter out what the user actively holds.
+          const seedsTheyCanBorrowNow = detailedSeedsAvailable.filter(
+            (seed) => seed.QuantityAtBranch > 0 // Should be true from API, but good check
           );
 
-          if (!inventoryRecords || inventoryRecords.length === 0) {
-            setFormError("No seeds currently in inventory at this branch.");
-            setLoading(false);
-            return;
-          }
+          setSeedsAvailableForSelection(seedsTheyCanBorrowNow);
 
-          const seedIdsInInventory = Array.from(
-            new Set(inventoryRecords.map((inv) => inv.Seeds_id))
-          );
-
-          if (seedIdsInInventory.length === 0) {
-            setFormError(
-              "No distinct seeds found in inventory for this branch."
-            );
-            setLoading(false);
-            return;
-          }
-
-          const seedDetailsList = await fetchSeedDetailsByIds(
-            seedIdsInInventory
-          );
-
-          const combinedAndFiltered = inventoryRecords.map((invRecord) => {
-            const detail = seedDetailsList.find(
-              (s) => s.Id === invRecord.Seeds_id
-            );
-            if (!detail) return null;
-            return {
-              SeedId: detail.Id,
-              SeedName: detail.SeedName,
-              SeedType: detail.SeedType,
-              QuantityAtBranch: invRecord.QuantityAtBranch,
-              SeedInventoryId: invRecord.Id,
-            };
-          });
-
-          setSeedsAvailableForSelection(combinedAndFiltered);
-
-          if (combinedAndFiltered.length === 0) {
-            if (inventoryRecords.length > 0) {
-              // Implies all available are already held or out of stock (though gt 0 filter should catch this)
+          if (seedsTheyCanBorrowNow.length === 0) {
+            if (detailedSeedsAvailable.length > 0) {
               setFormError(
-                "All available seeds at this branch are already held by you or have run out for new borrows."
+                "All available seeds at this branch are already held by you or have run out."
               );
             } else {
-              // This case should be caught by inventoryRecords.length === 0 above
-              setFormError(
-                "No new seeds available for you at this branch currently."
-              );
+              setFormError("No seeds currently available at this branch.");
             }
           }
         } catch (err) {
-          console.error("Failed to fetch seeds for branch:", err);
-          setFormError("Could not load seeds for the selected branch.");
+          console.error(
+            "Failed to fetch or process detailed seeds for branch:",
+            err
+          );
+          setFormError(
+            err.message || "Could not load seeds for the selected branch."
+          );
         } finally {
           setLoading(false);
         }
@@ -334,7 +313,7 @@ export default function BorrowPage() {
 
       // 2. Perform batch PATCH to SeedInventory
       await batchUpdateSeedInventory(inventoryUpdates);
-
+      console.log("Client: Seed Inventory batch update call succeeded.");
       // 3. If inventory update is successful, proceed to create Pending Pickup
       const pickupData = {
         UserId: user.Id,
@@ -354,8 +333,14 @@ export default function BorrowPage() {
         SeedInventoryId: item.seedInventoryId,
       }));
 
-      await createPendingPickupRequest(pickupData, itemsDataForPickup);
-
+      const pendingPickupResponse = await createPendingPickupRequest(
+        pickupData,
+        itemsDataForPickup
+      );
+      console.log(
+        "Client: Create pending pickup request succeeded.",
+        pendingPickupResponse
+      );
       setSuccessMessage(
         `Your hold request for ${totalSelectedPackets} seed packet(s) has been placed! Please visit the library reference desk within 2 days to pick them up.`
       );
@@ -608,26 +593,53 @@ export default function BorrowPage() {
                 </div>
               )}
 
-              {pageError && (
-                <div className="my-4 p-4 bg-yellow-100 text-yellow-800 border-l-4 border-yellow-500 rounded-md shadow">
-                  <h3 className="text-lg font-semibold mb-1">
-                    Important Notice:
-                  </h3>
-                  <p>{pageError}</p>{" "}
-                  {/* pageError will contain the "active hold" message */}
-                  {hasActiveHold && (
-                    <button
-                      onClick={() => router.push("/")} // Or a specific "View My Holds" page if you build one
-                      className="mt-3 py-2 px-4 text-sm font-medium text-white bg-yellow-600 rounded-md hover:bg-yellow-700"
-                    >
-                      Okay, Go Home
-                    </button>
-                  )}
-                </div>
-              )}
+              {
+                pageError ? (
+                  <div className="my-4 p-4 bg-yellow-100 text-yellow-800 border-l-4 border-yellow-500 rounded-md shadow">
+                    <h3 className="text-lg font-semibold mb-1">
+                      Important Notice:
+                    </h3>
+                    <p>{pageError}</p>{" "}
+                    {/* pageError will contain the "active hold" message */}
+                    {hasActiveHold && (
+                      <button
+                        onClick={() => router.push("/")} // Or a specific "View My Holds" page if you build one
+                        className="mt-3 py-2 px-4 text-sm font-medium text-white bg-yellow-600 rounded-md hover:bg-yellow-700"
+                      >
+                        Okay, Go Home
+                      </button>
+                    )}
+                  </div>
+                ) : daysLeftToBorrow !== null &&
+                  daysLeftToBorrow > 0 /* Borrow Limit Reached Message */ ? (
+                  <div className="my-4 p-4 bg-blue-100 text-blue-800 border-l-4 border-blue-500 rounded-md shadow">
+                    <h3 className="text-lg font-semibold mb-1">
+                      Borrow Limit Reached
+                    </h3>
+                    <p>
+                      You have reached your borrowing limit of 3 seed packets
+                      for the current 30-day period.
+                    </p>
+                    <p className="mt-1">
+                      You can borrow more seeds in approximately{" "}
+                      <span className="font-bold">
+                        {daysLeftToBorrow} day(s)
+                      </span>
+                      .
+                    </p>
+                  </div>
+                ) : daysLeftToBorrow === 0 /* Can borrow today */ ? (
+                  <div className="my-4 p-4 bg-green-100 text-green-800 border-l-4 border-green-500 rounded-md shadow">
+                    <h3 className="text-lg font-semibold mb-1">
+                      Borrowing Unlocked!
+                    </h3>
+                    <p>You can borrow seeds again starting today!</p>
+                  </div>
+                ) : null /* No error, no limit reached - proceed to show borrow options */
+              }
 
               {/* Branch Selection Dropdown  */}
-              {!hasActiveHold && !pageError && (
+              {!hasActiveHold && !pageError && daysLeftToBorrow <= 0 && (
                 <div>
                   <label
                     htmlFor="branchSelect"
