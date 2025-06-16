@@ -14,6 +14,7 @@ import {
 } from "@/lib/noco-apis/seedInventory";
 import { updateUserStatus } from "@/lib/noco-apis/users"; // For updating user status
 import { formatDate } from "@/lib/utils";
+import toast from "react-hot-toast";
 
 // Define your hold time limit in days
 const HOLD_TIME_LIMIT_DAYS = 2;
@@ -55,18 +56,63 @@ export default function VerifiedPage() {
       pickup.ProcessedItems.length === 0
     ) {
       setActionError("Invalid pickup data for dispensing.");
+      toast.error("Invalid Pickup data for dispensing");
       return;
     }
     if (processingId) return;
 
-    const confirmDispense = window.confirm(
-      `Dispense seeds for ${pickup.UserFullName} (Card: ${pickup.LibraryCard})?`
+    toast(
+      (t) => (
+        <div className="flex flex-col items-center p-2">
+          <p className="text-sm font-medium text-gray-900 mb-2 text-center">
+            Dispense seeds for{" "}
+            <strong className="font-semibold">{pickup.UserFullName}</strong>{" "}
+            (Card: {pickup.LibraryCard})?
+          </p>
+          <p className="text-xs text-gray-600 mb-3 text-center">
+            This will update inventory and create borrow records.
+          </p>
+          <div className="w-full flex justify-center gap-3">
+            <button
+              onClick={() => {
+                toast.dismiss(t.id);
+                proceedWithDispense(pickup); // Call actual dispense logic
+              }}
+              className="w-full rounded-md border border-transparent bg-green-600 px-3 py-1.5 text-sm font-medium text-white shadow-sm hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2"
+            >
+              Confirm Dispense
+            </button>
+            <button
+              onClick={() => toast.dismiss(t.id)}
+              className="w-full rounded-md border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      ),
+      {
+        duration: Infinity, // Keep open until dismissed
+        position: "top-center",
+        // icon: '❓', // Optional icon
+        style: {
+          border: "1px solid #4B5563", // gray-600
+          padding: "12px",
+          color: "#1F2937", // gray-800
+          boxShadow:
+            "0 4px 6px -1px rgba(0,0,0,0.1), 0 2px 4px -1px rgba(0,0,0,0.06)",
+        },
+      }
     );
-    if (!confirmDispense) return;
+  };
 
+  const proceedWithDispense = async (pickup) => {
     setProcessingId(pickup.Id);
     setActionError("");
     let allItemsSuccessfullyProcessed = true;
+    const loadingToastId = toast.loading(
+      `Processing dispense for ${pickup.UserFullName}...`
+    );
 
     try {
       for (const item of pickup.ProcessedItems) {
@@ -106,21 +152,33 @@ export default function VerifiedPage() {
       }
 
       // 3. Update User Status if they were "New"
-      const userCurrentStatus = pickup.UserStatus || "Unknown";
-      if (userCurrentStatus !== "Validated") {
-        await updateUserStatus(pickup.Users_id, "Validated");
-      }
+      if (allItemsSuccessfullyProcessed) {
+        const userObjectFromLookup = pickup.UserId;
+        const userCurrentDBStatus =
+          userObjectFromLookup?.Status || pickup.UserStatus || "Unknown";
 
-      // 4. Update PendingPickup status to "Dispensed"
-      await updatePendingPickupStatus(pickup.Id, "Dispensed");
-      alert(
-        `Successfully dispensed seeds for ${pickup.UserFullName}. User status updated if applicable.`
-      );
+        if (userCurrentDBStatus === "New") {
+          await updateUserStatus(pickup.Users_id, "Validated");
+        }
+        await updatePendingPickupStatus(pickup.Id, "Dispensed");
+
+        toast.success(
+          `Successfully dispensed seeds for ${
+            pickup.UserFullName
+          }. User status ${
+            userCurrentDBStatus === "New" ? "updated." : "checked."
+          }`,
+          { id: loadingToastId }
+        );
+      } else {
+        if (!actionError)
+          setActionError("Some items could not be processed during dispense.");
+      }
     } catch (dispenseError) {
       console.error(`Error dispensing pickup ID ${pickup.Id}:`, dispenseError);
-      setActionError(
-        `Dispense Error for ${pickup.UserFullName}: ${dispenseError.message}. Some items may not have been fully processed. Check logs.`
-      );
+      const errorMessage = `Dispense Error for ${pickup.UserFullName}: ${dispenseError.message}. Check logs.`;
+      setActionError(errorMessage);
+      toast.error(errorMessage, { id: loadingToastId, duration: 5000 });
       allItemsSuccessfullyProcessed = false;
       try {
         await updatePendingPickupStatus(pickup.Id, "Dispense-Error");
@@ -143,22 +201,54 @@ export default function VerifiedPage() {
       pickup.ProcessedItems.length === 0
     ) {
       setActionError("Invalid pickup data for cancellation.");
+      toast.error("Invalid pickup data for cancellation.");
       return;
     }
     if (processingId) return;
 
-    const confirmCancel = window.confirm(
-      `Are you sure you want to cancel this seed request for ${
-        pickup.UserFullName
-      } and restock ${pickup.ProcessedItems.reduce(
-        (sum, item) => sum + item.QuantityToDispense,
-        0
-      )} packets?`
+    toast(
+      (t) => (
+        <div className="flex flex-col items-center p-2">
+          <p className="text-sm font-medium text-gray-900 mb-2 text-center">
+            Cancel request for{" "}
+            <strong className="font-semibold">{pickup.UserFullName}</strong> and
+            restock seeds?
+          </p>
+          <div className="w-full flex justify-center gap-3">
+            <button
+              onClick={() => {
+                toast.dismiss(t.id);
+                proceedWithCancel(pickup);
+              }}
+              className="w-full rounded-md border border-transparent bg-red-600 px-3 py-1.5 text-sm font-medium text-white shadow-sm hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2"
+            >
+              Confirm Cancel
+            </button>
+            <button
+              onClick={() => toast.dismiss(t.id)}
+              className="w-full rounded-md border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2"
+            >
+              Keep Request
+            </button>
+          </div>
+        </div>
+      ),
+      {
+        duration: Infinity,
+        position: "top-center",
+        style: {
+          /* ... same style as dispense confirm ... */
+        },
+      }
     );
-    if (!confirmCancel) return;
+  };
 
+  const proceedWithCancel = async (pickup) => {
     setProcessingId(pickup.Id);
     setActionError("");
+    const loadingToastId = toast.loading(
+      `Cancelling request for ${pickup.UserFullName}...`
+    );
     let allItemsSuccessfullyRestocked = true;
     const inventoryRestockPayloads = [];
 
@@ -210,15 +300,16 @@ export default function VerifiedPage() {
       }
 
       await updatePendingPickupStatus(pickup.Id, "Cancelled");
-      alert(
-        `Request for ${pickup.UserFullName} cancelled and seeds restocked.`
+      toast.success(
+        `Request for ${pickup.UserFullName} cancelled and seeds restocked.`,
+        { id: loadingToastId }
       );
     } catch (cancelError) {
       console.error(`Error cancelling request ID ${pickup.Id}:`, cancelError);
-      setActionError(
-        `Cancellation Error for ${pickup.UserFullName}: ${cancelError.message}. Inventory may not be fully restocked.`
-      );
-      allItemsSuccessfullyRestocked = false; // Ensure this reflects failure
+      const errorMessage = `Cancellation Error for ${pickup.UserFullName}: ${cancelError.message}. Inventory may not be fully restocked.`;
+      setActionError(errorMessage);
+      toast.error(errorMessage, { id: loadingToastId, duration: 5000 });
+      allItemsSuccessfullyRestocked = false;
       try {
         await updatePendingPickupStatus(pickup.Id, "Cancel-Error");
       } catch (e) {
@@ -226,7 +317,7 @@ export default function VerifiedPage() {
       }
     } finally {
       setProcessingId(null);
-      loadPendingPickups(); // Refresh list regardless of partial success to show new status
+      loadPendingPickups();
     }
   };
 

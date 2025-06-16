@@ -3,6 +3,7 @@ import "./globals.css";
 import { Suspense } from "react";
 import { SpeedInsights } from "@vercel/speed-insights/next";
 import { Analytics } from "@vercel/analytics/next";
+import { Toaster } from "react-hot-toast";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -28,6 +29,7 @@ export default function RootLayout({ children }) {
         <Suspense>{children}</Suspense>
         <SpeedInsights />
         <Analytics />
+        <Toaster />
       </body>
     </html>
   );

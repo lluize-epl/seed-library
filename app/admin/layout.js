@@ -4,8 +4,6 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
   UsersIcon,
-  CircleStackIcon, // For Inventory (like database stack) or BeakerIcon (seeds)
-  BeakerIcon,
   BuildingLibraryIcon, // For Branches
   Cog6ToothIcon,
   HomeIcon, // Link back to main app landing page
@@ -13,6 +11,7 @@ import {
 import eplLogo from "../../public/eplLogoOnly.png";
 import Image from "next/image";
 import { RiSeedlingLine } from "react-icons/ri";
+import { MdOutlineInventory } from "react-icons/md";
 
 const navigationItems = [
   {
@@ -22,7 +21,7 @@ const navigationItems = [
     current: true,
   }, // Default page
   { name: "Seed Stats", href: "/admin/seed-stats", icon: RiSeedlingLine }, // Or use a more specific seed icon
-  { name: "Inventory", href: "/admin/inventory", icon: CircleStackIcon },
+  { name: "Inventory", href: "/admin/inventory", icon: MdOutlineInventory },
   {
     name: "Branch Stats",
     href: "/admin/branch-stats",
