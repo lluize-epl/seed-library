@@ -56,13 +56,14 @@ export async function GET(request) {
       // Step 3: Fetch full seed details for these Seed IDs
       const seedDetailsQueryParams = `?where=(Id,in,${seedIdsInInventory.join(
         ","
-      )})&fields=Id,SeedName,SeedType`;
+      )})&fields=Id,SeedName,SeedType&limit=100`;
       const seedDetailsData = await serverNocoFetch(
         SEEDS_TABLE_ID,
         "/records",
         { method: "GET" },
         seedDetailsQueryParams
       );
+
       seedDetailsList = seedDetailsData?.list || [];
     }
 
@@ -75,7 +76,7 @@ export async function GET(request) {
         return {
           inventoryId: invRecord.Id, // PK of the SeedInventory record
           seedId: invRecord.Seeds_id, // FK to Seeds table
-          seedName: detail?.SeedName || `Seed ID ${invRecord.Seeds_id}`,
+          seedName: detail?.SeedName || detail?.SeedType,
           seedType: detail?.SeedType || "N/A",
           quantity: invRecord.QuantityAtBranch, // Current quantity at this branch
         };
