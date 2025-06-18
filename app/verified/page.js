@@ -904,7 +904,7 @@ export default function VerifiedPage() {
                                   : "text-gray-800"
                               }`}
                             >
-                              {item.seedName}
+                              {item.seedType}
                             </span>
                             {/* Placeholder for Seed Edit Icon */}
                             <button
@@ -915,7 +915,7 @@ export default function VerifiedPage() {
                                   sidebarSelectedBranchId
                                 )
                               } // You'll define this
-                              title={`Edit ${item.seedName} quantity`}
+                              title={`Edit ${item.seedType} quantity`}
                               className="ml-2 p-0.5 text-gray-400 hover:text-indigo-600 focus:outline-none focus:ring-1 focus:ring-indigo-500 rounded flex-shrink-0"
                             >
                               <PencilSquareIcon className="h-3.5 w-3.5" />
@@ -925,7 +925,7 @@ export default function VerifiedPage() {
                             {item.quantity}
                           </span>
                         </div>
-                        <p className="text-xs text-gray-500">{item.seedType}</p>
+                        <p className="text-xs text-gray-500">{item.seedName}</p>
                       </div>
                     )
                 )}
