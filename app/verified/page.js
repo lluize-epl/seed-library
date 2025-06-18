@@ -97,7 +97,7 @@ export default function VerifiedPage() {
 
       if (enrichedInventory && enrichedInventory.length > 0) {
         const sortedInventory = enrichedInventory.sort((a, b) =>
-          (a.seedName || "").localeCompare(b.seedName || "")
+          (a.seedType || "").localeCompare(b.seedType || "")
         );
         setSidebarBranchInventory(sortedInventory);
       } else {
