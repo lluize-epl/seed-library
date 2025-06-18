@@ -37,10 +37,10 @@ export default function Home() {
             Borrow more seeds
           </Link>
           <Link
+            disabled
             href="/borrow"
             className="w-full py-6 rounded-xl text-xl font-semibold bg-black text-white border-2 border-green-medium shadow-md focus:outline-none focus:ring-2 focus:ring-black transition text-center block hover:scale-105 focus:ring-offset-2 "
             passHref
-            disabled
           >
             Donate Seeds
           </Link>
