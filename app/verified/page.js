@@ -1,10 +1,13 @@
 // /app/verified/page.js
 "use client";
 import { useState, useEffect, useCallback } from "react";
-
+import { EditLibraryCardForm } from "../components/EditLibraryCardForm";
+import { EditSeedQuantityForm } from "../components/EditSeedQuantityForm";
+import { updateSeedInventoryQuantity } from "@/lib/noco-apis/seedInventory";
 import {
   fetchPendingPickupsWithLookups,
   updatePendingPickupStatus,
+  updatePickupLibraryCard,
 } from "@/lib/noco-apis/pendingPickups";
 import { createBorrowTransaction } from "@/lib/noco-apis/borrowTransactions"; // Assuming this handles linking correctly
 import {
@@ -16,6 +19,8 @@ import { fetchAllBranches } from "@/lib/noco-apis/branches";
 import { updateUserStatus } from "@/lib/noco-apis/users"; // For updating user status
 import { formatDate } from "@/lib/utils";
 import toast from "react-hot-toast";
+import { PencilSquareIcon } from "@heroicons/react/24/outline";
+import { trackDynamic } from "next/dist/server/route-modules/app-route/module";
 
 // Define your hold time limit in days
 const HOLD_TIME_LIMIT_DAYS = 2;
@@ -31,6 +36,9 @@ export default function VerifiedPage() {
   const [sidebarBranchInventory, setSidebarBranchInventory] = useState([]);
   const [sidebarInventoryLoading, setSidebarInventoryLoading] = useState(false);
   const [sidebarInventoryError, setSidebarInventoryError] = useState("");
+  const [editingCardPickupId, setEditingCardPickupId] = useState(null); // To know which pickup's card is being edited
+
+  const [editingInventoryItem, setEditingInventoryItem] = useState(null); // Stores the { inventoryId, seedName, seedType, quantity } object
 
   const loadPendingPickups = useCallback(async () => {
     if (!loading) setLoading(true); // Set loading true only if not already loading by another process
@@ -50,7 +58,7 @@ export default function VerifiedPage() {
 
   useEffect(() => {
     loadPendingPickups();
-    const intervalId = setInterval(loadPendingPickups, 30000);
+    const intervalId = setInterval(loadPendingPickups, 300000);
     return () => clearInterval(intervalId);
   }, []); // Load once on mount, interval handles refresh. useCallback will give stable func.
 
@@ -394,6 +402,139 @@ export default function VerifiedPage() {
     }
   };
 
+  const handleEditLibraryCard = (pickup) => {
+    setEditingCardPickupId(pickup.Id); // Still need this to know which pickup is targeted
+
+    const toastId = toast(
+      (
+        t // t.id is passed to the form
+      ) => (
+        <EditLibraryCardForm
+          initialValue={pickup.LibraryCard}
+          pickupFullName={pickup.UserFullName}
+          toastId={t.id}
+          onApply={async (newCardValue, staffName) => {
+            // This is the callback for "Apply"
+            const currentPickupId = pickup.Id; // Use pickup.Id from closure
+
+            // No need to dismiss here, EditLibraryCardForm's handleApplyClick does it
+            const loadingToastId = toast.loading(
+              `Updating card for ${pickup.UserFullName} (by ${staffName})...`
+            );
+            try {
+              await updatePickupLibraryCard(
+                currentPickupId,
+                newCardValue,
+                staffName
+              );
+              toast.success(
+                `Card for ${pickup.UserFullName} updated to ${newCardValue} by ${staffName}`,
+                { id: loadingToastId }
+              );
+              setPendingPickups((prev) =>
+                prev.map((p) =>
+                  p.Id === currentPickupId
+                    ? { ...p, LibraryCard: newCardValue }
+                    : p
+                )
+              );
+            } catch (apiError) {
+              toast.error(`Failed: ${apiError.message}`, {
+                id: loadingToastId,
+              });
+            } finally {
+              setEditingCardPickupId(null);
+            }
+          }}
+          onCancel={() => {
+            toast.dismiss(t.id);
+            setEditingCardPickupId(null);
+          }}
+        />
+      ),
+      {
+        duration: Infinity, // Keep open until dismissed
+        position: "top-center",
+        style: {
+          border: "1px solid #D1D5DB", // gray-300
+          borderRadius: "0.75rem", // rounded-xl
+          padding: "0px", // Custom component handles padding
+          // width: 'auto', // Let content define width up to max-w-sm
+          // maxWidth: '24rem', // Equivalent to max-w-sm
+        },
+      }
+    );
+  };
+  const handleEditSeedInInventory = (itemToEdit) => {
+    if (!itemToEdit || itemToEdit.inventoryId === undefined) {
+      toast.error(`Could Not get seed inventory ID from list`);
+      return;
+    }
+    setEditingInventoryItem(itemToEdit); // Still useful to know which item is being conceptually edited
+
+    const currentBranchName =
+      allBranches.find((b) => b.Id === parseInt(sidebarSelectedBranchId))
+        ?.BranchName || "Selected Branch";
+
+    const toastId = toast(
+      (t) => (
+        <EditSeedQuantityForm
+          initialQuantity={itemToEdit.quantity}
+          itemToEdit={itemToEdit} // Pass the whole item for context if needed
+          branchName={currentBranchName}
+          toastId={t.id}
+          onApply={async (newQuantity, staffName) => {
+            const originalItem = itemToEdit; // Use itemToEdit from closure
+            // toast.dismiss(t.id); // Dismissal handled in EditSeedQuantityForm
+            const loadingToastId = toast.loading(
+              `Updating stock for ${originalItem.seedName} (by ${staffName})...`
+            );
+            try {
+              await updateSeedInventoryQuantity(
+                originalItem.inventoryId,
+                newQuantity,
+                staffName
+              );
+              toast.success(
+                `Stock for ${originalItem.seedName} updated to ${newQuantity} by ${staffName}.`,
+                { id: loadingToastId }
+              );
+              setSidebarBranchInventory((prevInv) =>
+                prevInv.map((inv) =>
+                  inv.inventoryId === originalItem.inventoryId
+                    ? { ...inv, quantity: newQuantity }
+                    : inv
+                )
+              );
+            } catch (apiError) {
+              toast.error(`Failed to update stock: ${apiError.message}`, {
+                id: loadingToastId,
+                duration: 4000,
+              });
+            } finally {
+              setEditingInventoryItem(null);
+            }
+          }}
+          onCancel={() => {
+            toast.dismiss(t.id);
+            setEditingInventoryItem(null);
+          }}
+        />
+      ),
+      {
+        duration: Infinity,
+        position: "top-center",
+        style: {
+          border: "1px solid #D1D5DB", // gray-300
+          borderRadius: "0.75rem", // rounded-xl
+          padding: "0px", // Custom component handles padding
+          // width: 'auto', // Let content define width up to max-w-sm
+          // maxWidth: '24rem', // Equivalent to max-w-sm
+        },
+      }
+    );
+  };
+
   // --- JSX ---
   return (
     <div className="flex mx-auto p-4 md:p-8 font-geist-sans">
@@ -529,20 +670,32 @@ export default function VerifiedPage() {
                       >
                         {pickup.UserFullName}
                       </h2>
-                      <p className="text-xs text-gray-500">
-                        Card: {pickup.LibraryCard} | Patron Status:{" "}
-                        <span
-                          className={`font-semibold ${
-                            userStatusDisplay === "New"
-                              ? "text-blue-600"
-                              : userStatusDisplay === "Validated"
-                              ? "text-green-600"
-                              : "text-gray-500"
-                          }`}
+                      <div className="flex items-center text-xs text-gray-500">
+                        <span>Card: {pickup.LibraryCard}</span>
+                        <button
+                          style={{ cursor: "pointer" }}
+                          onClick={() => handleEditLibraryCard(pickup)}
+                          title="Edit Library Card"
+                          className="ml-2 p-0.5 text-gray-400 hover:text-indigo-600 focus:outline-none focus:ring-1 focus:ring-indigo-500 rounded"
                         >
-                          {userStatusDisplay}
-                        </span>
-                      </p>
+                          <PencilSquareIcon className="h-3.5 w-3.5 md:h-4 md:w-4" />
+                        </button>
+
+                        <p className="text-xs text-gray-500">
+                          Patron Status:{" "}
+                          <span
+                            className={`font-semibold ${
+                              userStatusDisplay === "New"
+                                ? "text-blue-600"
+                                : userStatusDisplay === "Validated"
+                                ? "text-green-600"
+                                : "text-gray-500"
+                            }`}
+                          >
+                            {userStatusDisplay}
+                          </span>
+                        </p>
+                      </div>
                       <p className="text-xs text-gray-500">
                         Requested:{" "}
                         {formatDate(
@@ -714,7 +867,7 @@ export default function VerifiedPage() {
           </div>
         </div>
         {/* Inventory Display - flex-grow and overflow-y-auto for scrolling content */}
-        <div className="flex-grow overflow-y-auto pt-2 pr-1">
+        <div className="flex-1 overflow-y-auto pt-2 pr-1">
           {" "}
           {/* Added padding-right for scrollbar */}
           {sidebarInventoryLoading && (
@@ -737,15 +890,37 @@ export default function VerifiedPage() {
               <div className="space-y-1.5">
                 {sidebarBranchInventory.map(
                   (item) =>
-                    item.quantity > 0 && (
+                    item.quantity >= 0 && (
                       <div
                         key={item.inventoryId}
                         className="p-2 border-b border-gray-100 text-sm hover:bg-gray-50 rounded"
                       >
                         <div className="flex justify-between items-center">
-                          <span className="font-medium text-gray-800">
-                            {item.seedName}
-                          </span>
+                          <div className="flex items-center flex-grow mr-2">
+                            <span
+                              className={`font-medium ${
+                                item.quantity <= 3
+                                  ? "text-red-400"
+                                  : "text-gray-800"
+                              }`}
+                            >
+                              {item.seedName}
+                            </span>
+                            {/* Placeholder for Seed Edit Icon */}
+                            <button
+                              style={{ cursor: "pointer" }}
+                              onClick={() =>
+                                handleEditSeedInInventory(
+                                  item,
+                                  sidebarSelectedBranchId
+                                )
+                              } // You'll define this
+                              title={`Edit ${item.seedName} quantity`}
+                              className="ml-2 p-0.5 text-gray-400 hover:text-indigo-600 focus:outline-none focus:ring-1 focus:ring-indigo-500 rounded flex-shrink-0"
+                            >
+                              <PencilSquareIcon className="h-3.5 w-3.5" />
+                            </button>
+                          </div>
                           <span className="font-bold text-blue-600 px-1.5 py-0.5 bg-blue-100 rounded-full text-xs">
                             {item.quantity}
                           </span>

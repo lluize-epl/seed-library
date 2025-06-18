@@ -13,8 +13,7 @@ export async function PATCH(request) {
   }
 
   try {
-    const inventoryUpdates = await request.json(); // Expects an array: [{ Id, QuantityAtBranch }, ...]
-
+    const inventoryUpdates = await request.json(); // Expects an array: [{ Id, QuantityAtBranch, staffName }, ...]
     if (!Array.isArray(inventoryUpdates) || inventoryUpdates.length === 0) {
       return NextResponse.json(
         {
@@ -25,6 +24,11 @@ export async function PATCH(request) {
       );
     }
 
+    let staffName = "Reference Desk";
+
+    if (inventoryUpdates[0] && inventoryUpdates[0].staffName) {
+      staffName = inventoryUpdates[0].staffName;
+    }
     // Optional: Add server-side validation for each update item
     for (const update of inventoryUpdates) {
       if (
@@ -35,13 +39,14 @@ export async function PATCH(request) {
         return NextResponse.json(
           {
             error:
-              "Invalid item in inventory update array. Each item needs Id and non-negative QuantityAtBranch.",
+              "Invalid item in inventory update array. Each item needs Id, non-negative QuantityAtBranch and the name of staff updating it.",
           },
           { status: 400 }
         );
       }
     }
 
+    console.log(`***** ${staffName} is Updating Seed ****`, inventoryUpdates);
     // NocoDB's PATCH to /records (plural) expects an array of objects, each with its Id.
     const nocoResponse = await serverNocoFetch(
       SEED_INVENTORY_TABLE_ID,
@@ -55,6 +60,7 @@ export async function PATCH(request) {
     // NocoDB PATCH to /records usually returns an array of updated records or a success indicator.
     // If it returns null on success for PATCH, that's fine.
     // If it returns the updated records, you can pass them back.
+    console.log(`Seed updated by staff: ${staffName || "Unknown"}`);
     return NextResponse.json(
       { message: "Inventory updated successfully.", data: nocoResponse },
       { status: 200 }

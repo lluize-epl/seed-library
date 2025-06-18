@@ -438,6 +438,7 @@ export default function BorrowPage() {
                 placeholder="Enter 14-digit card number"
                 required
                 autoFocus
+                maxLength={14}
               />
             </div>
 

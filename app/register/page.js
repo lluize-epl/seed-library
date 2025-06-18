@@ -293,6 +293,7 @@ export default function RegisterPage() {
                 className="w-full p-3 md:p-4 text-lg md:text-xl border border-gray-300 rounded-md shadow-sm focus:ring-green-500 focus:border-green-500"
                 required
                 autoFocus
+                maxLength={14}
               />
             </div>
             {pageError && (
